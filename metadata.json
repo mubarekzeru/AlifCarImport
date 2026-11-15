@@ -1,0 +1,6 @@
+{
+  "name": "Alif Car Import",
+  "description": "Minimalist imported vehicle showroom with Make/Model/Year search, TikTok video links, dealership location & contact, and an intuitive admin inventory dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,337 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  filterVehicles,
+  getFilterOptions,
+  formatPrice,
+  formatVehicleTileModel,
+  extractTikTokVideoId,
+  normalizeTikTokUrl,
+  isTikTokVideoUrl,
+  filterActiveTikTokPosts,
+  resolveTikTokAdminCardMode,
+  deriveTitleFromVideoDescription,
+  validateVehicleInput,
+  buildWhatsAppHref,
+  buildSocialMediaUrl,
+  getConfiguredSocialLinks,
+  isAuthorizedAdminEmail,
+} from './inventory';
+import type { Vehicle } from '../types/showroom';
+
+const SAMPLE_VEHICLES: Vehicle[] = [
+  {
+    id: 'v1',
+    title: '2024 Toyota Land Cruiser 300 ZX',
+    make: 'Toyota',
+    model: 'Land Cruiser',
+    year: 2024,
+    price: 89500,
+    mileage: '4,200 km',
+    transmission: 'Automatic',
+    fuelType: 'V6 Twin-Turbo',
+    color: 'Pearl White',
+    origin: 'Japan Import',
+    imageUrl: '/car1.jpg',
+    description: 'Clean direct import with full leather interior and sunroof.',
+    tiktokUrl: 'https://www.tiktok.com/@alifcarimport/video/7340123456789012345',
+    status: 'available',
+    featured: true,
+    createdAt: '2026-10-01T00:00:00Z',
+  },
+  {
+    id: 'v2',
+    title: '2023 Mercedes-Benz GLE 450 AMG Line',
+    make: 'Mercedes-Benz',
+    model: 'GLE 450',
+    year: 2023,
+    price: 78000,
+    mileage: '11,800 km',
+    transmission: '9G-Tronic',
+    fuelType: 'Mild Hybrid',
+    color: 'Obsidian Black',
+    origin: 'Germany Import',
+    imageUrl: '/car2.jpg',
+    description: 'Executive SUV with panoramic roof and Burmester audio.',
+    tiktokUrl: '',
+    status: 'reserved',
+    featured: false,
+    createdAt: '2026-10-02T00:00:00Z',
+  },
+  {
+    id: 'v3',
+    title: '2024 Toyota RAV4 Hybrid Limited',
+    make: 'Toyota',
+    model: 'RAV4',
+    year: 2024,
+    price: 44000,
+    mileage: '1,900 km',
+    transmission: 'e-CVT',
+    fuelType: 'Hybrid',
+    color: 'Silver',
+    origin: 'UAE Import',
+    imageUrl: '/car3.jpg',
+    description: 'Fuel-efficient AWD hybrid ready for immediate registration.',
+    tiktokUrl: '',
+    status: 'available',
+    featured: false,
+    createdAt: '2026-10-03T00:00:00Z',
+  },
+];
+
+test('filterVehicles filters by make, model, year, and free-text query', () => {
+  const byMake = filterVehicles(SAMPLE_VEHICLES, {
+    query: '',
+    make: 'Toyota',
+    model: '',
+    year: '',
+  });
+  assert.equal(byMake.length, 2);
+
+  const byMakeAndModel = filterVehicles(SAMPLE_VEHICLES, {
+    query: '',
+    make: 'Toyota',
+    model: 'Land Cruiser',
+    year: '',
+  });
+  assert.equal(byMakeAndModel.length, 1);
+  assert.equal(byMakeAndModel[0].id, 'v1');
+
+  const byYear = filterVehicles(SAMPLE_VEHICLES, {
+    query: '',
+    make: '',
+    model: '',
+    year: '2023',
+  });
+  assert.equal(byYear.length, 1);
+  assert.equal(byYear[0].id, 'v2');
+
+  const byQuery = filterVehicles(SAMPLE_VEHICLES, {
+    query: 'burmester',
+    make: '',
+    model: '',
+    year: '',
+  });
+  assert.equal(byQuery.length, 1);
+  assert.equal(byQuery[0].id, 'v2');
+
+  const byPartialTypedMake = filterVehicles(SAMPLE_VEHICLES, {
+    query: '',
+    make: 'toy',
+    model: 'cruis',
+    year: '24',
+  });
+  assert.equal(byPartialTypedMake.length, 1);
+  assert.equal(byPartialTypedMake[0].id, 'v1');
+});
+
+test('getFilterOptions scopes models to selectedMake and sorts years descending', () => {
+  const allOptions = getFilterOptions(SAMPLE_VEHICLES, '');
+  assert.deepEqual(allOptions.makes, ['Mercedes-Benz', 'Toyota']);
+  assert.deepEqual(allOptions.models, ['GLE 450', 'Land Cruiser', 'RAV4']);
+  assert.deepEqual(allOptions.years, [2024, 2023]);
+
+  const toyotaOptions = getFilterOptions(SAMPLE_VEHICLES, 'Toyota');
+  assert.deepEqual(toyotaOptions.models, ['Land Cruiser', 'RAV4']);
+
+  const partialToyotaOptions = getFilterOptions(SAMPLE_VEHICLES, 'toy');
+  assert.deepEqual(partialToyotaOptions.models, ['Land Cruiser', 'RAV4']);
+});
+
+test('extractTikTokVideoId parses standard TikTok video URLs and rejects invalid ones', () => {
+  assert.equal(
+    extractTikTokVideoId('https://www.tiktok.com/@alifcarimport/video/7340123456789012345?lang=en'),
+    '7340123456789012345'
+  );
+  assert.equal(extractTikTokVideoId('https://www.tiktok.com/@alifcarimport'), null);
+  assert.equal(extractTikTokVideoId('not-a-url'), null);
+});
+
+test('formatPrice formats USD without decimals and handles zero/negative gracefully', () => {
+  assert.equal(formatPrice(89500), '$89,500');
+  assert.equal(formatPrice(0), 'Price on Request');
+});
+
+test('validateVehicleInput catches missing required fields and malformed TikTok URLs', () => {
+  const bad = validateVehicleInput({
+    title: '',
+    make: 'Toyota',
+    model: '',
+    year: 1970,
+    price: -10,
+    description: '',
+    tiktokUrl: 'invalid-url',
+  });
+  assert.ok(bad.title);
+  assert.ok(bad.model);
+  assert.ok(bad.year);
+  assert.ok(bad.price);
+  assert.ok(bad.description);
+  assert.ok(bad.tiktokUrl);
+
+  const ok = validateVehicleInput({
+    title: '2024 Lexus RX 350',
+    make: 'Lexus',
+    model: 'RX 350',
+    year: 2024,
+    price: 68500,
+    description: 'Low mileage luxury SUV.',
+    tiktokUrl: 'https://www.tiktok.com/@alifcarimport/video/7340123456789012345',
+  });
+  assert.deepEqual(ok, {});
+});
+
+test('buildWhatsAppHref strips formatting characters and encodes message', () => {
+  const href = buildWhatsAppHref('+251 91 123 4567', 'Interested in Land Cruiser');
+  assert.equal(href, 'https://wa.me/251911234567?text=Interested%20in%20Land%20Cruiser');
+});
+
+test('isAuthorizedAdminEmail validates authorized emails case-insensitively and rejects visitors', () => {
+  assert.equal(isAuthorizedAdminEmail('mubyzeru@gmail.com'), true);
+  assert.equal(isAuthorizedAdminEmail('  MUBYZERU@GMAIL.COM  '), true);
+  assert.equal(isAuthorizedAdminEmail('admin@alifcarimport.com'), true);
+  assert.equal(isAuthorizedAdminEmail('visitor@example.com'), false);
+  assert.equal(isAuthorizedAdminEmail(''), false);
+  assert.equal(isAuthorizedAdminEmail('team@alifcarimport.com', ['team@alifcarimport.com']), true);
+});
+
+test('isTikTokVideoUrl recognizes short vt/vm/t links, bare links, share text, /photo/ and /video/ links', () => {
+  assert.equal(isTikTokVideoUrl('https://vt.tiktok.com/ZSpbrcUvR/'), true);
+  assert.equal(isTikTokVideoUrl('vt.tiktok.com/ZSpbrcUvR/'), true);
+  assert.equal(
+    isTikTokVideoUrl('Check this ride out! https://vt.tiktok.com/ZSpbrcUvR/'),
+    true
+  );
+  assert.equal(isTikTokVideoUrl('https://vm.tiktok.com/ZM6abc123/'), true);
+  assert.equal(isTikTokVideoUrl('https://www.tiktok.com/t/ZP8abc123/'), true);
+  assert.equal(
+    isTikTokVideoUrl('https://www.tiktok.com/@alif_car_import/video/7653002113408077064'),
+    true
+  );
+  assert.equal(
+    isTikTokVideoUrl('https://www.tiktok.com/@alif_car_import/photo/7653002113408077064'),
+    true
+  );
+  assert.equal(
+    normalizeTikTokUrl('Look at this car vt.tiktok.com/ZSpbrcUvR/'),
+    'https://vt.tiktok.com/ZSpbrcUvR/'
+  );
+  assert.equal(isTikTokVideoUrl('https://www.tiktok.com/@alifcarimport'), false);
+  assert.equal(isTikTokVideoUrl(''), false);
+  assert.equal(isTikTokVideoUrl('https://example.com/video/123'), false);
+});
+
+test('filterActiveTikTokPosts excludes posts without an inserted video link', () => {
+  const posts = [
+    { id: '1', tiktokUrl: 'https://www.tiktok.com/@alif_car_import/video/7653002113408077064' },
+    { id: '2', tiktokUrl: 'https://www.tiktok.com/@alifcarimport' },
+    { id: '3', tiktokUrl: '' },
+    { id: '4', tiktokUrl: 'https://vt.tiktok.com/ZSpbrcUvR/' },
+    { id: '5', tiktokUrl: 'vt.tiktok.com/ZSp999abc/' },
+  ];
+  const filtered = filterActiveTikTokPosts(posts);
+  assert.deepEqual(
+    filtered.map((p) => p.id),
+    ['1', '4', '5']
+  );
+});
+
+test('deriveTitleFromVideoDescription derives concise titles from prose and hashtag captions', () => {
+  assert.equal(
+    deriveTitleFromVideoDescription(
+      '#SongPlus #alifcarimport #ethiopian_tik_tok🇪🇹🇪🇹🇪🇹🇪🇹 #creatorsearchinsights #ethiopian_tik_tok @Alif Car Import 2 @Alif Car Import 3 @BENJA.K 🎥@hidayah 💃'
+    ),
+    'Song Plus'
+  );
+
+  assert.equal(
+    deriveTitleFromVideoDescription(
+      '2024 Toyota Land Cruiser 300 ZX arriving in Bole showroom. Contact us for price! #alifcarimport'
+    ),
+    '2024 Toyota Land Cruiser 300 ZX arriving in Bole showroom'
+  );
+
+  assert.equal(
+    deriveTitleFromVideoDescription(
+      'Fresh customs-cleared Pearl White 300 ZX cabin and twin-turbo inspection.'
+    ),
+    'Fresh customs-cleared Pearl White 300 ZX cabin and twin-turbo...'
+  );
+
+  assert.equal(deriveTitleFromVideoDescription('   '), '');
+});
+
+test('resolveTikTokAdminCardMode collapses published posts unless explicitly opened for editing or link change', () => {
+  assert.equal(
+    resolveTikTokAdminCardMode('https://www.tiktok.com/@alif_car_import/video/7653002113408077064'),
+    'collapsed'
+  );
+  assert.equal(resolveTikTokAdminCardMode(''), 'edit');
+  assert.equal(resolveTikTokAdminCardMode('https://vt.tiktok.com/ZSpbrcUvR/', 'edit'), 'edit');
+  assert.equal(
+    resolveTikTokAdminCardMode('https://vt.tiktok.com/ZSpbrcUvR/', 'change-link'),
+    'change-link'
+  );
+});
+
+test('buildSocialMediaUrl resolves usernames, handles, and full URLs across platforms', () => {
+  assert.equal(buildSocialMediaUrl('telegram', '@alif_cars'), 'https://t.me/alif_cars');
+  assert.equal(buildSocialMediaUrl('telegram', 't.me/alif_cars'), 'https://t.me/alif_cars');
+  assert.equal(
+    buildSocialMediaUrl('instagram', 'alifcarimport'),
+    'https://www.instagram.com/alifcarimport'
+  );
+  assert.equal(
+    buildSocialMediaUrl('facebook', 'AlifCarImport'),
+    'https://www.facebook.com/AlifCarImport'
+  );
+  assert.equal(buildSocialMediaUrl('x', '@alifcars'), 'https://x.com/alifcars');
+  assert.equal(
+    buildSocialMediaUrl('whatsapp', 'https://wa.me/251911004580'),
+    'https://wa.me/251911004580'
+  );
+  assert.equal(buildSocialMediaUrl('telegram', '   '), null);
+});
+
+test('getConfiguredSocialLinks returns only populated social accounts in display order', () => {
+  const configured = getConfiguredSocialLinks(
+    {
+      phone: '+251911004580',
+      whatsapp: '+251911004580',
+      telegram: '@alif_telegram',
+      instagram: 'alif_insta',
+      facebook: '',
+      x: '@alif_x',
+    },
+    { handle: '@alif_car_import', profileUrl: 'https://vt.tiktok.com/ZSpbD52xJ/' }
+  );
+  assert.deepEqual(
+    configured.map((c) => c.platform),
+    ['whatsapp', 'telegram', 'instagram', 'x', 'tiktok']
+  );
+  assert.equal(configured[1].href, 'https://t.me/alif_telegram');
+  assert.equal(configured[2].href, 'https://www.instagram.com/alif_insta');
+  assert.equal(configured[3].href, 'https://x.com/alif_x');
+});
+
+test('formatVehicleTileModel strips leading year and make cleanly', () => {
+  assert.equal(
+    formatVehicleTileModel({
+      title: '2024 Toyota Land Cruiser 300 ZX',
+      make: 'Toyota',
+      model: 'Land Cruiser',
+      year: 2024,
+    }),
+    'Land Cruiser 300 ZX'
+  );
+  assert.equal(
+    formatVehicleTileModel({
+      title: 'Hyundai Tucson Hybrid SEL',
+      make: 'Hyundai',
+      model: 'Tucson',
+      year: 2024,
+    }),
+    'Tucson Hybrid SEL'
+  );
+});
+
