@@ -554,3 +554,229 @@ export function formatVehicleTileModel(vehicle: {
   return cleaned || vehicle.model || vehicle.title;
 }
 
+export function getVehicleGalleryImages(
+  vehicle: Pick<Vehicle, 'imageUrl' | 'galleryImages'>
+): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  const pushUnique = (raw?: string) => {
+    const trimmed = typeof raw === 'string' ? raw.trim() : '';
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    result.push(trimmed);
+  };
+
+  pushUnique(vehicle.imageUrl);
+  if (Array.isArray(vehicle.galleryImages)) {
+    for (const url of vehicle.galleryImages) {
+      pushUnique(url);
+    }
+  }
+
+  return result;
+}
+
+export function getRelatedShowroomVehicles(
+  vehicles: Vehicle[],
+  currentVehicle: Pick<Vehicle, 'id' | 'make'>
+): Vehicle[] {
+  const currentMake = currentVehicle.make.trim().toLowerCase();
+  const others = vehicles.filter((v) => v.id !== currentVehicle.id);
+
+  const statusRank = (status: Vehicle['status']) =>
+    status === 'available' ? 0 : status === 'reserved' ? 1 : 2;
+
+  return [...others].sort((a, b) => {
+    const aAvail = statusRank(a.status);
+    const bAvail = statusRank(b.status);
+    if (aAvail !== bAvail) return aAvail - bAvail;
+
+    const aSameMake = a.make.trim().toLowerCase() === currentMake ? 0 : 1;
+    const bSameMake = b.make.trim().toLowerCase() === currentMake ? 0 : 1;
+    if (aSameMake !== bSameMake) return aSameMake - bSameMake;
+
+    return 0;
+  });
+}
+
+export function getSimilarVehicles(
+  vehicles: Vehicle[],
+  currentVehicle: Pick<Vehicle, 'id' | 'make' | 'origin'>
+): Vehicle[] {
+  const targetMake = currentVehicle.make.trim().toLowerCase();
+  const targetOrigin = currentVehicle.origin.trim().toLowerCase();
+
+  const matches = vehicles.filter((v) => {
+    if (v.id === currentVehicle.id) return false;
+    const sameMake = Boolean(targetMake) && v.make.trim().toLowerCase() === targetMake;
+    const sameOrigin = Boolean(targetOrigin) && v.origin.trim().toLowerCase() === targetOrigin;
+    return sameMake || sameOrigin;
+  });
+
+  const statusRank = (status: Vehicle['status']) =>
+    status === 'available' ? 0 : status === 'reserved' ? 1 : 2;
+
+  return [...matches].sort((a, b) => {
+    const aSameMake = a.make.trim().toLowerCase() === targetMake ? 0 : 1;
+    const bSameMake = b.make.trim().toLowerCase() === targetMake ? 0 : 1;
+    if (aSameMake !== bSameMake) return aSameMake - bSameMake;
+    return statusRank(a.status) - statusRank(b.status);
+  });
+}
+
+export interface VehiclePricingBreakdown {
+  originalPrice: number;
+  finalPrice: number;
+  discountAmount: number;
+  discountPercent: number;
+  hasDiscount: boolean;
+}
+
+export function getVehiclePricingBreakdown(
+  vehicle: Pick<Vehicle, 'price' | 'originalPrice'>
+): VehiclePricingBreakdown {
+  const finalPrice = Number.isFinite(vehicle.price) && vehicle.price > 0 ? vehicle.price : 0;
+  const rawOriginal =
+    typeof vehicle.originalPrice === 'number' && Number.isFinite(vehicle.originalPrice)
+      ? vehicle.originalPrice
+      : 0;
+
+  if (finalPrice > 0 && rawOriginal > finalPrice) {
+    const discountAmount = rawOriginal - finalPrice;
+    const discountPercent = Math.round((discountAmount / rawOriginal) * 100);
+    return {
+      originalPrice: rawOriginal,
+      finalPrice,
+      discountAmount,
+      discountPercent,
+      hasDiscount: true,
+    };
+  }
+
+  return {
+    originalPrice: finalPrice,
+    finalPrice,
+    discountAmount: 0,
+    discountPercent: 0,
+    hasDiscount: false,
+  };
+}
+
+export interface ColorSwatchOption {
+  label: string;
+  query: string;
+  swatchClass: string;
+  isReset?: boolean;
+}
+
+interface ColorPaletteEntry {
+  label: string;
+  keywords: string[];
+  swatchClass: string;
+}
+
+const COLOR_PALETTE_DEFINITIONS: ColorPaletteEntry[] = [
+  {
+    label: 'Pearl White',
+    keywords: ['white', 'pearl', 'ivory', 'chalk'],
+    swatchClass: 'bg-[#f4f4f5] border-zinc-400',
+  },
+  {
+    label: 'Obsidian Black',
+    keywords: ['black', 'obsidian', 'onyx', 'ebony'],
+    swatchClass: 'bg-[#121215] border-zinc-600',
+  },
+  {
+    label: 'Carmine Red',
+    keywords: ['red', 'carmine', 'crimson', 'scarlet'],
+    swatchClass: 'bg-[#D92027] border-red-400/50',
+  },
+  {
+    label: 'Titanium Silver',
+    keywords: ['silver', 'titanium', 'chrome'],
+    swatchClass: 'bg-[#9ca3af] border-zinc-500',
+  },
+  {
+    label: 'Slate Gray',
+    keywords: ['gray', 'grey', 'slate', 'charcoal', 'graphite'],
+    swatchClass: 'bg-[#52525b] border-zinc-500',
+  },
+  {
+    label: 'Deep Emerald',
+    keywords: ['emerald', 'green', 'olive'],
+    swatchClass: 'bg-[#14532d] border-emerald-700/50',
+  },
+  {
+    label: 'Cobalt Blue',
+    keywords: ['blue', 'cobalt', 'navy', 'sapphire'],
+    swatchClass: 'bg-[#1d4ed8] border-blue-500/50',
+  },
+  {
+    label: 'Champagne Gold',
+    keywords: ['gold', 'champagne', 'sand', 'beige'],
+    swatchClass: 'bg-[#d4af37] border-amber-400/50',
+  },
+  {
+    label: 'Metallic Bronze',
+    keywords: ['bronze', 'brown', 'espresso'],
+    swatchClass: 'bg-[#78350f] border-amber-800/60',
+  },
+  {
+    label: 'Sunset Orange',
+    keywords: ['orange', 'copper'],
+    swatchClass: 'bg-[#ea580c] border-orange-500/50',
+  },
+  {
+    label: 'Burgundy',
+    keywords: ['burgundy', 'maroon', 'wine'],
+    swatchClass: 'bg-[#7f1d1d] border-red-900/60',
+  },
+  {
+    label: 'Solar Yellow',
+    keywords: ['yellow'],
+    swatchClass: 'bg-[#eab308] border-yellow-400/50',
+  },
+];
+
+export function getAvailableColorSwatches(
+  vehicles: Pick<Vehicle, 'color' | 'status'>[]
+): ColorSwatchOption[] {
+  const availableColors = vehicles
+    .filter((v) => v.status === 'available' && typeof v.color === 'string' && v.color.trim())
+    .map((v) => v.color.trim().toLowerCase());
+
+  if (availableColors.length === 0) {
+    return [];
+  }
+
+  const matchedSwatches: ColorSwatchOption[] = [];
+
+  for (const entry of COLOR_PALETTE_DEFINITIONS) {
+    const matchedKeyword = entry.keywords.find((kw) =>
+      availableColors.some((colorText) => new RegExp(`\\b${kw}\\b`, 'i').test(colorText))
+    );
+    if (matchedKeyword) {
+      matchedSwatches.push({
+        label: entry.label,
+        query: matchedKeyword.charAt(0).toUpperCase() + matchedKeyword.slice(1),
+        swatchClass: entry.swatchClass,
+      });
+    }
+  }
+
+  if (matchedSwatches.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      label: 'All Colors',
+      query: '',
+      swatchClass: 'bg-zinc-900 border-zinc-700',
+      isReset: true,
+    },
+    ...matchedSwatches,
+  ];
+}
+

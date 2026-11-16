@@ -1,5 +1,4 @@
 import type { ShowroomStore } from '../types/showroom';
-import heroShowroomImg from '../assets/images/hero_showroom_clean_1794739288037.jpg';
 import landCruiserImg from '../assets/images/car_toyota_landcruiser_1794739271134.jpg';
 import lexusRxImg from '../assets/images/car_lexus_rx350_1794739271072.jpg';
 import mercedesGleImg from '../assets/images/car_mercedes_gle_1794739272520.jpg';
@@ -7,8 +6,13 @@ import hyundaiTucsonImg from '../assets/images/car_hyundai_tucson_1794739272095.
 import porscheCayenneImg from '../assets/images/car_porsche_cayenne_1794739272240.jpg';
 import kiaSportageImg from '../assets/images/car_kia_sportage_1794739273770.jpg';
 
-export const ALIF_DEFAULT_LOGO = '/assets/aistudio/file_00000000f2b48211a1d7ce760b266f14_d8a15dfc.png';
-export const ALIF_DEFAULT_HERO_SIGN = '/assets/aistudio/1794743573450_afe14f04.jpg';
+const BASE_URL =
+  typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
+    ? import.meta.env.BASE_URL
+    : '/';
+
+export const ALIF_DEFAULT_LOGO = `${BASE_URL}assets/aistudio/file_00000000f2b48211a1d7ce760b266f14_d8a15dfc.png`;
+export const ALIF_DEFAULT_HERO_SIGN = `${BASE_URL}assets/aistudio/1794743573450_afe14f04.jpg`;
 
 export const PRESET_VEHICLE_PHOTOS = [
   { label: 'Alif Showroom Sign (Night)', url: ALIF_DEFAULT_HERO_SIGN },
@@ -18,7 +22,6 @@ export const PRESET_VEHICLE_PHOTOS = [
   { label: 'Hyundai Tucson Hybrid', url: hyundaiTucsonImg },
   { label: 'Porsche Cayenne S', url: porscheCayenneImg },
   { label: 'Kia Sportage X-Pro', url: kiaSportageImg },
-  { label: 'Showroom Gallery SUV', url: heroShowroomImg },
 ];
 
 export const INITIAL_SHOWROOM_STORE: ShowroomStore = {

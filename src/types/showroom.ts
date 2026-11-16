@@ -7,12 +7,14 @@ export interface Vehicle {
   model: string;
   year: number;
   price: number;
+  originalPrice?: number;
   mileage: string;
   transmission: string;
   fuelType: string;
   color: string;
   origin: string;
   imageUrl: string;
+  galleryImages?: string[];
   description: string;
   tiktokUrl: string;
   status: VehicleStatus;

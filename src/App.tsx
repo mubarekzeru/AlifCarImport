@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { ArrowLeft, Lock, Mail } from 'lucide-react';
+import { AnimatePresence, MotionConfig, motion } from 'motion/react';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AdminDashboard } from './components/AdminDashboard';
-import { AdminLoginModal } from './components/AdminLoginModal';
 import { Footer } from './components/Footer';
 import { HeroSection } from './components/HeroSection';
 import { LocationContactSection } from './components/LocationContactSection';
@@ -9,13 +10,18 @@ import { Navbar } from './components/Navbar';
 import { SearchFilterBar } from './components/SearchFilterBar';
 import { TikTokShowcase } from './components/TikTokShowcase';
 import { VehicleCard } from './components/VehicleCard';
-import { VehicleDetailModal } from './components/VehicleDetailModal';
+import { VehicleDetailPage } from './components/VehicleDetailPage';
 import { INITIAL_SHOWROOM_STORE } from './data/seedData';
 import type { ShowroomStore, Vehicle, VehicleFilters, VehicleStatus } from './types/showroom';
-import { filterVehicles, formatPrice, getFilterOptions } from './utils/inventory';
+import {
+  filterVehicles,
+  getAvailableColorSwatches,
+  getFilterOptions,
+} from './utils/inventory';
 import {
   checkAdminSession,
   loadShowroomStore,
+  loginAdminByEmail,
   logoutAdmin,
   resetShowroomStore,
   saveShowroomStore,
@@ -31,30 +37,193 @@ const INITIAL_FILTERS: VehicleFilters = {
 type MatrixMode = 'make' | 'origin' | 'status';
 type ShowcaseTab = 'all' | 'featured' | 'available' | 'reserved';
 
-const COLOR_SWATCHES = [
-  { label: 'All Colors', query: '', swatchClass: 'bg-zinc-900 border-zinc-700', isReset: true },
-  { label: 'Pearl White', query: 'White', swatchClass: 'bg-[#f4f4f5] border-zinc-400' },
-  { label: 'Obsidian Black', query: 'Black', swatchClass: 'bg-[#121215] border-zinc-600' },
-  { label: 'Carmine Red', query: 'Red', swatchClass: 'bg-[#D92027] border-red-400/50' },
-  { label: 'Titanium Silver', query: 'Silver', swatchClass: 'bg-[#9ca3af] border-zinc-500' },
-  { label: 'Slate Gray', query: 'Gray', swatchClass: 'bg-[#52525b] border-zinc-500' },
-  { label: 'Deep Emerald', query: 'Emerald', swatchClass: 'bg-[#14532d] border-emerald-700/50' },
-  { label: 'Cobalt Blue', query: 'Blue', swatchClass: 'bg-[#1d4ed8] border-blue-500/50' },
-];
+function CarDetailRoute({
+  store,
+  loaded,
+  onBackHome,
+  onFilterByMake,
+  onSelectVehicle,
+}: {
+  store: ShowroomStore;
+  loaded: boolean;
+  onBackHome: () => void;
+  onFilterByMake: (make: string) => void;
+  onSelectVehicle: (vehicle: Vehicle) => void;
+}) {
+  const { id } = useParams<{ id: string }>();
+  const decodedId = id ? decodeURIComponent(id) : '';
+  const vehicle = store.vehicles.find((v) => v.id === decodedId) ?? null;
+
+  if (!loaded && store.vehicles.length === 0) {
+    return (
+      <main className="flex-1 bg-[#0a0a0c] pt-24 pb-16 px-4 max-w-7xl mx-auto w-full">
+        <div className="h-96 rounded-xl bg-[#141418] border border-zinc-800 animate-pulse" />
+      </main>
+    );
+  }
+
+  if (!vehicle) {
+    return (
+      <main className="flex-1 bg-[#0a0a0c] pt-24 pb-16 px-4">
+        <div className="max-w-xl mx-auto bg-[#141418] border border-zinc-800 rounded-xl p-8 text-center space-y-4">
+          <h1 className="font-display text-2xl font-bold text-white uppercase">
+            Vehicle Not Found
+          </h1>
+          <p className="text-sm text-zinc-400">
+            This vehicle listing may have been sold or removed from the showroom inventory.
+          </p>
+          <button
+            type="button"
+            onClick={onBackHome}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#D92027] hover:bg-[#B91C1C] text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+            <span>Back to Showroom</span>
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <VehicleDetailPage
+      vehicle={vehicle}
+      allVehicles={store.vehicles}
+      companyName={store.branding.companyName}
+      contact={store.contact}
+      onBackHome={onBackHome}
+      onFilterByMake={onFilterByMake}
+      onSelectVehicle={onSelectVehicle}
+    />
+  );
+}
+
+function AdminLoginView({
+  logoUrl,
+  companyName,
+  authorizedEmails,
+  onAuthenticated,
+  onBackToShowroom,
+}: {
+  logoUrl?: string;
+  companyName: string;
+  authorizedEmails?: string[];
+  onAuthenticated: (email: string) => void;
+  onBackToShowroom: () => void;
+}) {
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    const trimmed = email.trim();
+    if (!trimmed) {
+      setError('Please enter your admin email address.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const session = await loginAdminByEmail(trimmed, authorizedEmails);
+      setEmail('');
+      onAuthenticated(session.email);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to sign in.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="min-h-screen bg-[#0a0a0c] flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-[#141418] border border-zinc-800 rounded-xl shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2.5">
+            {logoUrl ? (
+              <img
+                src={logoUrl}
+                alt={companyName}
+                referrerPolicy="no-referrer"
+                className="w-8 h-8 rounded-full object-cover bg-white shrink-0"
+              />
+            ) : (
+              <Lock className="w-4 h-4 text-[#D92027]" aria-hidden="true" />
+            )}
+            <h1 className="font-display text-lg font-semibold text-white">
+              Admin Sign In
+            </h1>
+          </div>
+          <button
+            type="button"
+            onClick={onBackToShowroom}
+            className="inline-flex items-center gap-1 text-xs font-medium text-zinc-400 hover:text-white cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Showroom</span>
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            Enter your authorized {companyName} administrator email to access inventory and content controls.
+          </p>
+
+          <div>
+            <label htmlFor="admin-login-email" className="block text-xs font-medium text-zinc-300 mb-1.5">
+              Admin Email *
+            </label>
+            <div className="relative">
+              <Mail
+                className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                id="admin-login-email"
+                type="email"
+                required
+                autoFocus
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@example.com"
+                className="w-full h-11 pl-9 pr-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#D92027]"
+              />
+            </div>
+          </div>
+
+          {error && (
+            <p role="alert" className="text-xs font-medium text-[#D92027]">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full h-11 bg-[#D92027] hover:bg-[#B91C1C] disabled:opacity-60 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
+          >
+            {submitting ? 'Verifying...' : 'Sign In'}
+          </button>
+        </form>
+      </div>
+    </main>
+  );
+}
 
 export default function App() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isAdminRoute = location.pathname.startsWith('/admin');
+
   const [store, setStore] = useState<ShowroomStore>(INITIAL_SHOWROOM_STORE);
   const [loaded, setLoaded] = useState(false);
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
-  const [isAdminView, setIsAdminView] = useState(false);
-  const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [filters, setFilters] = useState<VehicleFilters>(INITIAL_FILTERS);
   const [matrixMode, setMatrixMode] = useState<MatrixMode>('make');
   const [showcaseTab, setShowcaseTab] = useState<ShowcaseTab>('all');
-  const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
-  const [inquiryVehicleTitle, setInquiryVehicleTitle] = useState('');
   const saveTimerRef = useRef<number | null>(null);
   const storeRef = useRef<ShowroomStore>(INITIAL_SHOWROOM_STORE);
 
@@ -72,6 +241,10 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  }, [location.pathname]);
 
   const persistStoreNow = async (targetStore: ShowroomStore): Promise<boolean> => {
     setSaveState('saving');
@@ -138,7 +311,6 @@ export default function App() {
   const handleLogoutAdmin = async () => {
     await logoutAdmin();
     setAdminEmail(null);
-    setIsAdminView(false);
   };
 
   const filterOptions = useMemo(
@@ -164,11 +336,6 @@ export default function App() {
     return base;
   }, [store.vehicles, filters, effectiveStatusFilter, showcaseTab]);
 
-  const featuredSpotlight = useMemo(() => {
-    const picks = store.vehicles.filter((v) => v.featured);
-    return (picks.length >= 2 ? picks : store.vehicles).slice(0, 2);
-  }, [store.vehicles]);
-
   const makeMatrixItems = useMemo(() => {
     const counts = new Map<string, number>();
     for (const v of store.vehicles) {
@@ -177,7 +344,7 @@ export default function App() {
     const items = Array.from(counts.entries()).map(([name, count]) => ({
       key: name,
       title: name,
-      subtitle: `${count} ${count === 1 ? 'vehicle' : 'vehicles'}`,
+      subtitle: `(${count})`,
       active: filters.make.toLowerCase() === name.toLowerCase(),
       onClick: () => {
         setFilters((prev) => ({
@@ -194,7 +361,7 @@ export default function App() {
       items.push({
         key: '__featured',
         title: 'Featured',
-        subtitle: `${featuredCount} ${featuredCount === 1 ? 'vehicle' : 'vehicles'}`,
+        subtitle: `(${featuredCount})`,
         active: showcaseTab === 'featured',
         onClick: () => {
           setShowcaseTab((prev) => (prev === 'featured' ? 'all' : 'featured'));
@@ -206,7 +373,7 @@ export default function App() {
       items.push({
         key: '__all_imports',
         title: 'All Imports',
-        subtitle: `${store.vehicles.length} vehicles`,
+        subtitle: `(${store.vehicles.length})`,
         active: false,
         onClick: () => {
           setFilters(INITIAL_FILTERS);
@@ -216,7 +383,7 @@ export default function App() {
       });
     }
     return items;
-  }, [store.vehicles, filters.make, filters.query, showcaseTab]);
+  }, [store.vehicles, filters.make, showcaseTab]);
 
   const originMatrixItems = useMemo(() => {
     const counts = new Map<string, number>();
@@ -226,7 +393,7 @@ export default function App() {
     return Array.from(counts.entries()).map(([origin, count]) => ({
       key: origin,
       title: origin,
-      subtitle: `${count} ${count === 1 ? 'vehicle' : 'vehicles'}`,
+      subtitle: `(${count})`,
       active: filters.query.toLowerCase() === origin.toLowerCase(),
       onClick: () => {
         setFilters((prev) => ({
@@ -246,7 +413,7 @@ export default function App() {
       {
         key: 'all',
         title: 'All Imports',
-        subtitle: `${store.vehicles.length} vehicles`,
+        subtitle: `(${store.vehicles.length})`,
         active: showcaseTab === 'all',
         onClick: () => {
           setShowcaseTab('all');
@@ -256,7 +423,7 @@ export default function App() {
       {
         key: 'available',
         title: 'Available Now',
-        subtitle: `${available} vehicles`,
+        subtitle: `(${available})`,
         active: showcaseTab === 'available',
         onClick: () => {
           setShowcaseTab('available');
@@ -266,7 +433,7 @@ export default function App() {
       {
         key: 'featured',
         title: 'Featured Arrivals',
-        subtitle: `${featured} vehicles`,
+        subtitle: `(${featured})`,
         active: showcaseTab === 'featured',
         onClick: () => {
           setShowcaseTab('featured');
@@ -276,7 +443,7 @@ export default function App() {
       {
         key: 'reserved',
         title: 'Reserved Units',
-        subtitle: `${reserved} vehicles`,
+        subtitle: `(${reserved})`,
         active: showcaseTab === 'reserved',
         onClick: () => {
           setShowcaseTab('reserved');
@@ -298,374 +465,376 @@ export default function App() {
     [store.vehicles]
   );
 
-  const scrollToSection = (sectionId: string) => {
-    if (isAdminView) {
-      setIsAdminView(false);
+  const visibleColorSwatches = useMemo(
+    () => getAvailableColorSwatches(store.vehicles),
+    [store.vehicles]
+  );
+
+  const navigateToSection = (sectionId: string) => {
+    if (location.pathname !== '/') {
+      navigate('/');
       window.setTimeout(() => {
         document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth' });
-      }, 60);
+      }, 120);
       return;
     }
     document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const canShowAdminDashboard = Boolean(adminEmail && isAdminView);
+  const openVehicleRoute = (vehicle: Vehicle) => {
+    navigate(`/car/${encodeURIComponent(vehicle.id)}`);
+  };
 
   return (
-    <div className="min-h-screen w-full flex flex-col bg-[#0a0a0c] text-zinc-100">
-      <Navbar
-        branding={store.branding}
-        adminEmail={adminEmail}
-        isAdminView={canShowAdminDashboard}
-        onOpenAdminLogin={() => setLoginModalOpen(true)}
-        onToggleAdminView={() => {
-          if (!adminEmail) {
-            setLoginModalOpen(true);
-            return;
-          }
-          setIsAdminView((prev) => !prev);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onLogoutAdmin={handleLogoutAdmin}
-        onNavigateSection={scrollToSection}
-      />
-
-      {canShowAdminDashboard ? (
-        <AdminDashboard
-          store={store}
-          saveState={saveState}
-          saveError={saveError}
-          onUpdateStore={handleUpdateStore}
-          onResetDefaults={handleResetDefaults}
-          onPublishAndView={async (sectionId) => {
-            if (saveTimerRef.current) {
-              window.clearTimeout(saveTimerRef.current);
-              saveTimerRef.current = null;
-            }
-            await persistStoreNow(storeRef.current);
-            setIsAdminView(false);
-            window.setTimeout(() => {
-              if (sectionId) {
-                document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth' });
-              } else {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }
-            }, 60);
-          }}
-        />
-      ) : (
-        <main className="flex-1 bg-[#0a0a0c]">
-          <HeroSection
+    <MotionConfig reducedMotion="user">
+      <div className="min-h-screen w-full flex flex-col bg-[#0a0a0c] text-zinc-100">
+        {!isAdminRoute && (
+          <Navbar
             branding={store.branding}
-            hero={store.hero}
-            totalVehicles={store.vehicles.length}
+            searchQuery={filters.query}
             availableCount={availableCount}
-            onBrowseClick={() => scrollToSection('inventory')}
-            onContactClick={() => scrollToSection('location-contact')}
+            onSearchChange={(query) => setFilters((prev) => ({ ...prev, query }))}
+            onSearchSubmit={() => navigateToSection('inventory-grid')}
+            onShopNow={() => navigateToSection('inventory-grid')}
+            onNavigateSection={navigateToSection}
           />
+        )}
 
-          {/* Docked Shop-by-Vehicle Filter + Editorial Spotlight + Brand Matrix + Inventory */}
-          <section
-            id="inventory"
-            className="scroll-mt-6 relative z-10 -mt-2 sm:-mt-5 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-14 space-y-10 sm:space-y-12"
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="flex-1 flex flex-col"
           >
-            {/* 1. Docked Dark Filter Strip matching reference "SHOP BY VEHICLE" bar */}
-            <SearchFilterBar
-              filters={filters}
-              vehicles={store.vehicles}
-              makes={filterOptions.makes}
-              models={filterOptions.models}
-              years={filterOptions.years}
-              totalCount={store.vehicles.length}
-              filteredCount={filteredVehicles.length}
-              onChange={setFilters}
-              onReset={() => {
-                setFilters(INITIAL_FILTERS);
-                setShowcaseTab('all');
-              }}
-              onSubmitSearch={() =>
-                document.getElementById('inventory-grid')?.scrollIntoView({ behavior: 'smooth' })
-              }
-            />
-
-            {/* 2. Two-Column Dark Featured Editorial Spotlight Cards */}
-            {featuredSpotlight.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {featuredSpotlight.map((vehicle) => (
-                  <button
-                    key={vehicle.id}
-                    type="button"
-                    onClick={() => setSelectedVehicle(vehicle)}
-                    className="group relative aspect-[16/10] sm:aspect-[16/9] w-full rounded-xl overflow-hidden border border-zinc-800 hover:border-zinc-600 bg-[#141418] text-left cursor-pointer transition-colors"
-                  >
-                    <img
-                      src={vehicle.imageUrl}
-                      alt={vehicle.title}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+            <Routes location={location}>
+              <Route
+                path="/"
+                element={
+                  <main className="flex-1 bg-[#0a0a0c]">
+                    <HeroSection
+                      branding={store.branding}
+                      hero={store.hero}
+                      totalVehicles={store.vehicles.length}
+                      availableCount={availableCount}
+                      onBrowseClick={() => navigateToSection('inventory')}
+                      onContactClick={() => navigateToSection('location-contact')}
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-[#09090c] via-[#09090c]/85 via-55% to-black/15 p-5 sm:p-6 flex flex-col justify-end">
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-red-400 mb-1 drop-shadow-sm">
-                        {vehicle.origin} · {formatPrice(vehicle.price)}
-                      </span>
-                      <h3 className="font-display text-lg sm:text-xl font-bold uppercase tracking-tight text-white leading-tight">
-                        {vehicle.title}
-                      </h3>
-                      <p className="mt-1 text-xs sm:text-sm text-zinc-300 line-clamp-2 max-w-md">
-                        {vehicle.description}
-                      </p>
-                      <span className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-white group-hover:text-[#D92027] transition-colors">
-                        <span>View Specs</span>
-                        <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
 
-            {/* 3. Select Vehicle By Brand / Origin / Status Matrix + Color Swatches */}
-            <div id="brand-showcase" className="scroll-mt-6 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-tight text-white">
-                  Select Your Vehicle{' '}
-                  <span className="font-normal text-zinc-400">
-                    By {matrixMode === 'make' ? 'Make' : matrixMode === 'origin' ? 'Origin' : 'Status'}
-                  </span>
-                </h2>
-
-                <div
-                  role="tablist"
-                  aria-label="Browse matrix mode"
-                  className="inline-flex items-center gap-1 bg-[#141418] border border-zinc-800 rounded-lg p-1 self-start sm:self-auto"
-                >
-                  {(
-                    [
-                      { id: 'make', label: 'MAKE' },
-                      { id: 'origin', label: 'ORIGIN' },
-                      { id: 'status', label: 'STATUS' },
-                    ] as const
-                  ).map((mode) => (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={matrixMode === mode.id}
-                      onClick={() => setMatrixMode(mode.id)}
-                      className={`px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded-md transition-colors cursor-pointer ${
-                        matrixMode === mode.id
-                          ? 'bg-[#D92027] text-white'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
+                    {/* Docked Shop-by-Vehicle Filter + Brand Matrix + Inventory */}
+                    <section
+                      id="inventory"
+                      className="scroll-mt-6 relative z-10 -mt-2 sm:-mt-5 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-14 space-y-10 sm:space-y-12"
                     >
-                      {mode.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                      <SearchFilterBar
+                        filters={filters}
+                        vehicles={store.vehicles}
+                        makes={filterOptions.makes}
+                        models={filterOptions.models}
+                        years={filterOptions.years}
+                        totalCount={store.vehicles.length}
+                        filteredCount={filteredVehicles.length}
+                        onChange={setFilters}
+                        onReset={() => {
+                          setFilters(INITIAL_FILTERS);
+                          setShowcaseTab('all');
+                        }}
+                        onSubmitSearch={() =>
+                          document
+                            .getElementById('inventory-grid')
+                            ?.scrollIntoView({ behavior: 'smooth' })
+                        }
+                      />
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 border border-zinc-800 bg-[#121216] rounded-xl overflow-hidden">
-                {activeMatrixItems.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={item.onClick}
-                    className={`p-5 sm:p-6 border-b border-r border-zinc-800 flex flex-col items-center justify-center text-center gap-1 transition-colors cursor-pointer ${
-                      item.active
-                        ? 'bg-[#201113] text-white'
-                        : 'hover:bg-[#19191f] text-zinc-100'
-                    }`}
-                  >
-                    <span className="font-display text-base sm:text-lg font-bold tracking-tight text-white">
-                      {item.title}
-                    </span>
-                    <span className="text-[11px] font-medium text-[#D92027]">{item.subtitle}</span>
-                  </button>
-                ))}
-              </div>
+                      {/* Select Vehicle By Brand / Origin / Status Matrix + Color Swatches */}
+                      <div id="brand-showcase" className="scroll-mt-6 space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-tight text-white">
+                            Select Your Vehicle{' '}
+                            <span className="font-normal text-zinc-400">
+                              By{' '}
+                              {matrixMode === 'make'
+                                ? 'Make'
+                                : matrixMode === 'origin'
+                                ? 'Origin'
+                                : 'Status'}
+                            </span>
+                          </h2>
 
-              {/* Clickable Exterior Color Swatch Row matching reference screenshot */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                {COLOR_SWATCHES.map((swatch) => {
-                  const isActive =
-                    swatch.isReset
-                      ? filters.query === ''
-                      : filters.query.toLowerCase() === swatch.query.toLowerCase();
-                  return (
-                    <button
-                      key={swatch.label}
-                      type="button"
-                      title={swatch.label}
-                      aria-label={`Filter by ${swatch.label}`}
-                      onClick={() => {
-                        setFilters((prev) => ({
-                          ...prev,
-                          query:
-                            swatch.isReset ||
-                            prev.query.toLowerCase() === swatch.query.toLowerCase()
-                              ? ''
-                              : swatch.query,
-                        }));
+                          <div
+                            role="tablist"
+                            aria-label="Browse matrix mode"
+                            className="inline-flex items-center gap-1 bg-[#141418] border border-zinc-800 rounded-lg p-1 self-start sm:self-auto"
+                          >
+                            {(
+                              [
+                                { id: 'make', label: 'MAKE' },
+                                { id: 'origin', label: 'ORIGIN' },
+                                { id: 'status', label: 'STATUS' },
+                              ] as const
+                            ).map((mode) => (
+                              <button
+                                key={mode.id}
+                                type="button"
+                                role="tab"
+                                aria-selected={matrixMode === mode.id}
+                                onClick={() => setMatrixMode(mode.id)}
+                                className={`px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded-md transition-colors cursor-pointer ${
+                                  matrixMode === mode.id
+                                    ? 'bg-[#D92027] text-white'
+                                    : 'text-zinc-400 hover:text-white'
+                                }`}
+                              >
+                                {mode.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                          {activeMatrixItems.map((item) => (
+                            <button
+                              key={item.key}
+                              type="button"
+                              onClick={item.onClick}
+                              className={`px-3 py-1.5 rounded-lg border inline-flex items-baseline gap-1.5 text-left transition-colors cursor-pointer ${
+                                item.active
+                                  ? 'bg-[#201113] border-[#D92027] text-white'
+                                  : 'bg-[#141418] border-zinc-800 hover:border-zinc-600 hover:bg-[#19191f] text-zinc-100'
+                              }`}
+                            >
+                              <span className="font-display text-xs sm:text-sm font-semibold tracking-tight text-white">
+                                {item.title}
+                              </span>
+                              <span className="text-[11px] font-medium text-[#D92027] tabular-nums">
+                                {item.subtitle}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+
+                        {visibleColorSwatches.length > 0 && (
+                          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                            {visibleColorSwatches.map((swatch) => {
+                              const isActive = swatch.isReset
+                                ? filters.query === ''
+                                : filters.query.toLowerCase() === swatch.query.toLowerCase();
+                              return (
+                                <button
+                                  key={swatch.label}
+                                  type="button"
+                                  title={swatch.label}
+                                  aria-label={`Filter by ${swatch.label}`}
+                                  onClick={() => {
+                                    setFilters((prev) => ({
+                                      ...prev,
+                                      query:
+                                        swatch.isReset ||
+                                        prev.query.toLowerCase() === swatch.query.toLowerCase()
+                                          ? ''
+                                          : swatch.query,
+                                    }));
+                                    document
+                                      .getElementById('inventory-grid')
+                                      ?.scrollIntoView({ behavior: 'smooth' });
+                                  }}
+                                  className={`shrink-0 w-10 h-10 rounded-md border-2 transition-transform cursor-pointer flex items-center justify-center ${
+                                    swatch.swatchClass
+                                  } ${
+                                    isActive
+                                      ? 'ring-2 ring-[#D92027] ring-offset-2 ring-offset-[#0a0a0c] scale-105'
+                                      : 'opacity-85 hover:opacity-100'
+                                  }`}
+                                >
+                                  {swatch.isReset && (
+                                    <span className="text-[10px] font-semibold uppercase text-zinc-300">
+                                      All
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Full Vehicle Showroom Grid */}
+                      <div id="inventory-grid" className="scroll-mt-6 space-y-6">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-tight text-white">
+                            Showroom{' '}
+                            <span className="font-normal text-zinc-400">
+                              at {store.branding.companyName}
+                            </span>
+                          </h2>
+
+                          <div
+                            role="tablist"
+                            aria-label="Filter vehicle availability"
+                            className="inline-flex items-center gap-1 bg-[#141418] border border-zinc-800 rounded-lg p-1 self-start sm:self-auto"
+                          >
+                            {(
+                              [
+                                { id: 'all', label: 'ALL' },
+                                { id: 'featured', label: 'FEATURED' },
+                                { id: 'available', label: 'AVAILABLE' },
+                                { id: 'reserved', label: 'RESERVED' },
+                              ] as const
+                            ).map((tab) => (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                role="tab"
+                                aria-selected={showcaseTab === tab.id}
+                                onClick={() => setShowcaseTab(tab.id)}
+                                className={`px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded-md transition-colors cursor-pointer ${
+                                  showcaseTab === tab.id
+                                    ? 'bg-[#D92027] text-white'
+                                    : 'text-zinc-400 hover:text-white'
+                                }`}
+                              >
+                                {tab.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {!loaded && store.vehicles.length === 0 ? (
+                          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-3.5">
+                            {[1, 2, 3, 4, 5, 6].map((n) => (
+                              <div
+                                key={n}
+                                className="h-56 rounded-lg bg-[#141418] border border-zinc-800 animate-pulse"
+                              />
+                            ))}
+                          </div>
+                        ) : filteredVehicles.length === 0 ? (
+                          <div className="border border-zinc-800 rounded-xl p-12 text-center space-y-3 bg-[#141418]">
+                            <h3 className="font-display text-lg font-semibold text-white">
+                              No matching vehicles found
+                            </h3>
+                            <p className="text-sm text-zinc-400 max-w-md mx-auto">
+                              Try clearing one of your Make, Model, or Year filters to browse all available imports.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFilters(INITIAL_FILTERS);
+                                setShowcaseTab('all');
+                              }}
+                              className="inline-flex items-center px-4 py-2 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs font-semibold rounded-lg cursor-pointer"
+                            >
+                              Show All Vehicles
+                            </button>
+                          </div>
+                        ) : (
+                          <div
+                            data-testid="vehicle-grid"
+                            className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-3.5"
+                          >
+                            {filteredVehicles.map((vehicle, idx) => (
+                              <VehicleCard
+                                key={vehicle.id}
+                                vehicle={vehicle}
+                                rank={idx + 1}
+                                index={idx}
+                                onSelect={openVehicleRoute}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </section>
+
+                    <TikTokShowcase tiktok={store.tiktok} />
+
+                    <LocationContactSection
+                      contact={store.contact}
+                      companyName={store.branding.companyName}
+                      logoUrl={store.branding.logoUrl}
+                      tiktok={store.tiktok}
+                    />
+                  </main>
+                }
+              />
+
+              <Route
+                path="/car/:id"
+                element={
+                  <CarDetailRoute
+                    store={store}
+                    loaded={loaded}
+                    onBackHome={() => navigate('/')}
+                    onFilterByMake={(make) => {
+                      setFilters({ ...INITIAL_FILTERS, make });
+                      setShowcaseTab('all');
+                      navigate('/');
+                      window.setTimeout(() => {
                         document
                           .getElementById('inventory-grid')
                           ?.scrollIntoView({ behavior: 'smooth' });
-                      }}
-                      className={`shrink-0 w-10 h-10 rounded-md border-2 transition-transform cursor-pointer flex items-center justify-center ${
-                        swatch.swatchClass
-                      } ${
-                        isActive
-                          ? 'ring-2 ring-[#D92027] ring-offset-2 ring-offset-[#0a0a0c] scale-105'
-                          : 'opacity-85 hover:opacity-100'
-                      }`}
-                    >
-                      {swatch.isReset && (
-                        <span className="text-[10px] font-semibold uppercase text-zinc-300">
-                          All
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* 4. Full Vehicle Showroom Grid matching "THIS MONTH AT..." */}
-            <div id="inventory-grid" className="scroll-mt-6 space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-tight text-white">
-                  Showroom{' '}
-                  <span className="font-normal text-zinc-400">
-                    at {store.branding.companyName}
-                  </span>
-                </h2>
-
-                <div
-                  role="tablist"
-                  aria-label="Filter vehicle availability"
-                  className="inline-flex items-center gap-1 bg-[#141418] border border-zinc-800 rounded-lg p-1 self-start sm:self-auto"
-                >
-                  {(
-                    [
-                      { id: 'all', label: 'ALL' },
-                      { id: 'featured', label: 'FEATURED' },
-                      { id: 'available', label: 'AVAILABLE' },
-                      { id: 'reserved', label: 'RESERVED' },
-                    ] as const
-                  ).map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={showcaseTab === tab.id}
-                      onClick={() => setShowcaseTab(tab.id)}
-                      className={`px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded-md transition-colors cursor-pointer ${
-                        showcaseTab === tab.id
-                          ? 'bg-[#D92027] text-white'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {!loaded && store.vehicles.length === 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {[1, 2, 3].map((n) => (
-                    <div
-                      key={n}
-                      className="h-96 rounded-xl bg-[#141418] border border-zinc-800 animate-pulse"
-                    />
-                  ))}
-                </div>
-              ) : filteredVehicles.length === 0 ? (
-                <div className="border border-zinc-800 rounded-xl p-12 text-center space-y-3 bg-[#141418]">
-                  <h3 className="font-display text-lg font-semibold text-white">
-                    No matching vehicles found
-                  </h3>
-                  <p className="text-sm text-zinc-400 max-w-md mx-auto">
-                    Try clearing one of your Make, Model, or Year filters to browse all available imports.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFilters(INITIAL_FILTERS);
-                      setShowcaseTab('all');
+                      }, 120);
                     }}
-                    className="inline-flex items-center px-4 py-2 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs font-semibold rounded-lg cursor-pointer"
-                  >
-                    Show All Vehicles
-                  </button>
-                </div>
-              ) : (
-                <div
-                  data-testid="vehicle-grid"
-                  className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-3.5"
-                >
-                  {filteredVehicles.map((vehicle, idx) => (
-                    <VehicleCard
-                      key={vehicle.id}
-                      vehicle={vehicle}
-                      rank={idx + 1}
-                      onSelect={setSelectedVehicle}
+                    onSelectVehicle={openVehicleRoute}
+                  />
+                }
+              />
+
+              <Route
+                path="/admin"
+                element={
+                  adminEmail ? (
+                    <AdminDashboard
+                      store={store}
+                      adminEmail={adminEmail}
+                      saveState={saveState}
+                      saveError={saveError}
+                      onUpdateStore={handleUpdateStore}
+                      onResetDefaults={handleResetDefaults}
+                      onSignOut={() => void handleLogoutAdmin()}
+                      onPublishAndView={async (sectionId) => {
+                        if (saveTimerRef.current) {
+                          window.clearTimeout(saveTimerRef.current);
+                          saveTimerRef.current = null;
+                        }
+                        await persistStoreNow(storeRef.current);
+                        navigate('/');
+                        if (sectionId) {
+                          window.setTimeout(() => {
+                            document
+                              .getElementById(sectionId)
+                              ?.scrollIntoView({ behavior: 'smooth' });
+                          }, 120);
+                        }
+                      }}
                     />
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
+                  ) : (
+                    <AdminLoginView
+                      logoUrl={store.branding.logoUrl}
+                      companyName={store.branding.companyName}
+                      authorizedEmails={store.adminEmails}
+                      onAuthenticated={(email) => setAdminEmail(email)}
+                      onBackToShowroom={() => navigate('/')}
+                    />
+                  )
+                }
+              />
 
-          <TikTokShowcase tiktok={store.tiktok} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </motion.div>
+        </AnimatePresence>
 
-          <LocationContactSection
+        {!isAdminRoute && (
+          <Footer
+            branding={store.branding}
             contact={store.contact}
-            companyName={store.branding.companyName}
-            logoUrl={store.branding.logoUrl}
             tiktok={store.tiktok}
-            selectedVehicleTitle={inquiryVehicleTitle}
-            onClearSelectedVehicle={() => setInquiryVehicleTitle('')}
           />
-        </main>
-      )}
-
-      {!canShowAdminDashboard && (
-        <Footer
-          branding={store.branding}
-          contact={store.contact}
-          tiktok={store.tiktok}
-          isAdminAuthenticated={Boolean(adminEmail)}
-          onOpenAdmin={() => {
-            if (!adminEmail) return;
-            setIsAdminView(true);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-        />
-      )}
-
-      <VehicleDetailModal
-        vehicle={selectedVehicle}
-        contact={store.contact}
-        onClose={() => setSelectedVehicle(null)}
-        onInquireVehicle={(vehicle) => {
-          setInquiryVehicleTitle(vehicle.title);
-          scrollToSection('inquiry-form');
-        }}
-      />
-
-      <AdminLoginModal
-        isOpen={loginModalOpen}
-        logoUrl={store.branding.logoUrl}
-        companyName={store.branding.companyName}
-        authorizedEmails={store.adminEmails}
-        onClose={() => setLoginModalOpen(false)}
-        onAuthenticated={(email) => {
-          setAdminEmail(email);
-          setLoginModalOpen(false);
-          setIsAdminView(true);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-      />
-    </div>
+        )}
+      </div>
+    </MotionConfig>
   );
 }

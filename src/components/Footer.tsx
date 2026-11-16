@@ -7,17 +7,9 @@ interface FooterProps {
   branding: BrandingSettings;
   contact: LocationContact;
   tiktok: TikTokSectionConfig;
-  isAdminAuthenticated: boolean;
-  onOpenAdmin: () => void;
 }
 
-export function Footer({
-  branding,
-  contact,
-  tiktok,
-  isAdminAuthenticated,
-  onOpenAdmin,
-}: FooterProps) {
+export function Footer({ branding, contact, tiktok }: FooterProps) {
   const socialLinks = getConfiguredSocialLinks(contact, tiktok, branding.companyName);
 
   return (
@@ -64,17 +56,6 @@ export function Footer({
           <div className="space-y-3 text-xs">
             <p className="font-semibold text-white uppercase tracking-wider">Connect</p>
             <SocialMediaIconRow links={socialLinks} companyName={branding.companyName} />
-            <div className="pt-1">
-              {isAdminAuthenticated && (
-                <button
-                  type="button"
-                  onClick={onOpenAdmin}
-                  className="text-xs font-medium text-zinc-400 hover:text-white underline underline-offset-4 cursor-pointer"
-                >
-                  Open Admin Dashboard
-                </button>
-              )}
-            </div>
           </div>
         </div>
 

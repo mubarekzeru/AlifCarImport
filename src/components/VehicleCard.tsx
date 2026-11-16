@@ -1,19 +1,29 @@
+import { motion } from 'motion/react';
 import type { Vehicle } from '../types/showroom';
 import { formatPrice, formatVehicleTileModel } from '../utils/inventory';
 
 interface VehicleCardProps {
   vehicle: Vehicle;
   rank?: number;
+  index?: number;
   onSelect: (vehicle: Vehicle) => void;
 }
 
-export function VehicleCard({ vehicle, rank, onSelect }: VehicleCardProps) {
+export function VehicleCard({ vehicle, rank, index = 0, onSelect }: VehicleCardProps) {
   const modelDisplay = formatVehicleTileModel(vehicle);
+  const staggerIndex = typeof index === 'number' ? index : Math.max(0, (rank ?? 1) - 1);
 
   return (
-    <article
+    <motion.article
       data-testid={`vehicle-card-${vehicle.id}`}
-      className="group bg-[#141418] border border-zinc-800/90 hover:border-zinc-500 rounded-lg overflow-hidden transition-colors"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{
+        duration: 0.28,
+        delay: Math.min(staggerIndex * 0.045, 0.36),
+        ease: [0.16, 1, 0.3, 1],
+      }}
+      className="group bg-[#141418] border border-zinc-800/90 hover:border-zinc-500 rounded-lg overflow-hidden transition-all duration-200 hover:-translate-y-0.5"
     >
       <button
         type="button"
@@ -69,6 +79,6 @@ export function VehicleCard({ vehicle, rank, onSelect }: VehicleCardProps) {
           </div>
         </div>
       </button>
-    </article>
+    </motion.article>
   );
 }

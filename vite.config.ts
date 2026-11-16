@@ -1,11 +1,44 @@
+import fs from 'node:fs';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
-export default defineConfig(() => {
+const DEFAULT_GITHUB_REPO = 'alif-car-import';
+
+function resolveGitHubPagesBase(): string {
+  if (process.env.VITE_BASE_PATH) {
+    const custom = process.env.VITE_BASE_PATH.trim();
+    return custom.endsWith('/') ? custom : `${custom}/`;
+  }
+  const repoFromCi = process.env.GITHUB_REPOSITORY?.split('/')[1];
+  const repoName = repoFromCi || DEFAULT_GITHUB_REPO;
+  return `/${repoName}/`;
+}
+
+function githubPagesSpaFallbackPlugin(): Plugin {
+  let outDir = 'dist';
   return {
-    plugins: [react(), tailwindcss()],
+    name: 'github-pages-spa-fallback',
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
+    closeBundle() {
+      const indexFile = path.resolve(__dirname, outDir, 'index.html');
+      const notFoundFile = path.resolve(__dirname, outDir, '404.html');
+      if (fs.existsSync(indexFile)) {
+        fs.copyFileSync(indexFile, notFoundFile);
+      }
+    },
+  };
+}
+
+export default defineConfig(({ command }) => {
+  const base = command === 'build' ? resolveGitHubPagesBase() : '/';
+
+  return {
+    base,
+    plugins: [react(), tailwindcss(), githubPagesSpaFallbackPlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
@@ -20,3 +53,4 @@ export default defineConfig(() => {
     },
   };
 });
+

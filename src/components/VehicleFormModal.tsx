@@ -32,12 +32,14 @@ export function VehicleFormModal({
   const [model, setModel] = useState('');
   const [year, setYear] = useState('2024');
   const [price, setPrice] = useState('');
+  const [originalPrice, setOriginalPrice] = useState('');
   const [mileage, setMileage] = useState('');
   const [transmission, setTransmission] = useState('Automatic');
   const [fuelType, setFuelType] = useState('Petrol');
   const [color, setColor] = useState('');
   const [origin, setOrigin] = useState('Japan Import');
   const [imageUrl, setImageUrl] = useState(PRESET_VEHICLE_PHOTOS[0].url);
+  const [galleryImages, setGalleryImages] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [tiktokUrl, setTiktokUrl] = useState('');
   const [status, setStatus] = useState<VehicleStatus>('available');
@@ -66,12 +68,20 @@ export function VehicleFormModal({
       setModel(initialVehicle.model);
       setYear(String(initialVehicle.year));
       setPrice(String(initialVehicle.price));
+      setOriginalPrice(
+        typeof initialVehicle.originalPrice === 'number' && initialVehicle.originalPrice > 0
+          ? String(initialVehicle.originalPrice)
+          : ''
+      );
       setMileage(initialVehicle.mileage);
       setTransmission(initialVehicle.transmission);
       setFuelType(initialVehicle.fuelType);
       setColor(initialVehicle.color);
       setOrigin(initialVehicle.origin);
       setImageUrl(initialVehicle.imageUrl);
+      setGalleryImages(
+        Array.isArray(initialVehicle.galleryImages) ? initialVehicle.galleryImages : []
+      );
       setDescription(initialVehicle.description);
       setTiktokUrl(initialVehicle.tiktokUrl);
       setStatus(initialVehicle.status);
@@ -82,12 +92,14 @@ export function VehicleFormModal({
       setModel('');
       setYear(String(new Date().getFullYear()));
       setPrice('');
+      setOriginalPrice('');
       setMileage('0 km');
       setTransmission('Automatic');
       setFuelType('Petrol');
       setColor('');
       setOrigin('Direct Import');
       setImageUrl(PRESET_VEHICLE_PHOTOS[0].url);
+      setGalleryImages([]);
       setDescription('');
       setTiktokUrl('');
       setStatus('available');
@@ -107,6 +119,26 @@ export function VehicleFormModal({
       setImageUrl(dataUrl);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Failed to load photo.');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleGalleryUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    setUploadError('');
+    setUploading(true);
+    try {
+      const uploaded: string[] = [];
+      for (const file of files.slice(0, 12)) {
+        const dataUrl = await readFileAsResizedDataUrl(file, 1280, 0.82);
+        uploaded.push(dataUrl);
+      }
+      setGalleryImages((prev) => [...prev, ...uploaded]);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Failed to load gallery photo.');
     } finally {
       setUploading(false);
       e.target.value = '';
@@ -171,12 +203,14 @@ export function VehicleFormModal({
       model: model.trim(),
       year: Number(year),
       price: Number(price) || 0,
+      ...(Number(originalPrice) > 0 ? { originalPrice: Number(originalPrice) } : {}),
       mileage: mileage.trim() || 'Verified Low Mileage',
       transmission: transmission.trim() || 'Automatic',
       fuelType: fuelType.trim() || 'Petrol',
       color: color.trim() || 'Standard',
       origin: origin.trim() || 'Direct Import',
       imageUrl: imageUrl.trim(),
+      galleryImages: galleryImages.filter((url) => url.trim() && url.trim() !== imageUrl.trim()),
       description: description.trim(),
       tiktokUrl: normalizedTikTok,
       status,
@@ -255,11 +289,55 @@ export function VehicleFormModal({
                       className="sr-only"
                     />
                   </label>
+                  <label className="inline-flex items-center gap-2 px-3.5 py-2 border border-zinc-700 hover:border-white bg-[#1c1c21] text-zinc-200 hover:text-white text-xs font-medium rounded-lg cursor-pointer transition-colors">
+                    <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Add Gallery Photos</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleGalleryUpload}
+                      className="sr-only"
+                    />
+                  </label>
                 </div>
                 {uploadError && (
                   <p className="mt-1 text-xs text-[#D92027]">{uploadError}</p>
                 )}
               </div>
+
+              {galleryImages.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="block text-[11px] font-medium text-zinc-400">
+                    Additional Gallery Photos ({galleryImages.length})
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {galleryImages.map((url, idx) => (
+                      <div
+                        key={`${idx}-${url.slice(0, 24)}`}
+                        className="relative w-16 h-12 rounded-md overflow-hidden border border-zinc-700 bg-zinc-900"
+                      >
+                        <img
+                          src={url}
+                          alt={`Gallery photo ${idx + 1}`}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setGalleryImages((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                          aria-label={`Remove gallery photo ${idx + 1}`}
+                          className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-black/80 text-white inline-flex items-center justify-center hover:bg-[#D92027] cursor-pointer"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {tiktokCovers.length > 0 && (
                 <div className="space-y-1.5">
@@ -326,8 +404,8 @@ export function VehicleFormModal({
             </div>
           </div>
 
-          {/* Make, Model, Year, Price */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {/* Make, Model, Year, Price, Original Price */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
             <div>
               <label htmlFor="vf-make" className="block text-xs font-medium text-zinc-300 mb-1">
                 Make *
@@ -375,7 +453,7 @@ export function VehicleFormModal({
 
             <div>
               <label htmlFor="vf-price" className="block text-xs font-medium text-zinc-300 mb-1">
-                Price (USD)
+                Final Price (USD)
               </label>
               <input
                 id="vf-price"
@@ -386,6 +464,20 @@ export function VehicleFormModal({
                 className={`${inputClass} tabular-nums`}
               />
               {errors.price && <p className="mt-1 text-xs text-[#D92027]">{errors.price}</p>}
+            </div>
+
+            <div className="col-span-2 sm:col-span-1">
+              <label htmlFor="vf-original-price" className="block text-xs font-medium text-zinc-300 mb-1">
+                Original Price
+              </label>
+              <input
+                id="vf-original-price"
+                type="number"
+                value={originalPrice}
+                onChange={(e) => setOriginalPrice(e.target.value)}
+                placeholder="Optional"
+                className={`${inputClass} tabular-nums`}
+              />
             </div>
           </div>
 

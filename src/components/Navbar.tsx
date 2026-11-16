@@ -1,24 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
-import { Lock, LogOut, Menu, ShieldCheck, X } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Menu, Search, ShoppingCart, X } from 'lucide-react';
 import type { BrandingSettings } from '../types/showroom';
 
 interface NavbarProps {
   branding: BrandingSettings;
-  adminEmail: string | null;
-  isAdminView: boolean;
-  onOpenAdminLogin: () => void;
-  onToggleAdminView: () => void;
-  onLogoutAdmin: () => void;
+  searchQuery: string;
+  availableCount: number;
+  onSearchChange: (value: string) => void;
+  onSearchSubmit: () => void;
+  onShopNow: () => void;
   onNavigateSection: (sectionId: string) => void;
 }
 
 export function Navbar({
   branding,
-  adminEmail,
-  isAdminView,
-  onOpenAdminLogin,
-  onToggleAdminView,
-  onLogoutAdmin,
+  searchQuery,
+  availableCount,
+  onSearchChange,
+  onSearchSubmit,
+  onShopNow,
   onNavigateSection,
 }: NavbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -28,8 +28,7 @@ export function Navbar({
     { label: 'Inventory', id: 'inventory' },
     { label: 'Browse by Make', id: 'brand-showcase' },
     { label: 'TikTok Reels', id: 'tiktok-showcase' },
-    { label: 'Location', id: 'location-contact' },
-    { label: 'Contact', id: 'inquiry-form' },
+    { label: 'Location & Social', id: 'location-contact' },
   ];
 
   useEffect(() => {
@@ -55,19 +54,77 @@ export function Navbar({
     onNavigateSection(id);
   };
 
+  const handleSearchFormSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    setMenuOpen(false);
+    onSearchSubmit();
+  };
+
   return (
-    <header ref={menuContainerRef} className="fixed top-4 right-4 sm:top-5 sm:right-6 z-50">
+    <header
+      ref={menuContainerRef}
+      className="fixed top-3 left-3 right-3 sm:left-auto sm:top-5 sm:right-6 z-50 flex items-center justify-end gap-2"
+    >
+      <form
+        role="search"
+        onSubmit={handleSearchFormSubmit}
+        className="flex-1 sm:flex-initial min-w-0 sm:w-64 md:w-72"
+      >
+        <div className="h-10 w-full rounded-full bg-[#141418]/75 backdrop-blur-md border border-white/15 focus-within:border-white/40 px-3.5 flex items-center gap-2 shadow-lg transition-colors">
+          <Search className="w-4 h-4 text-zinc-400 shrink-0" aria-hidden="true" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search cars, makes, colors..."
+            aria-label="Search showroom vehicles"
+            className="w-full min-w-0 bg-transparent text-xs sm:text-sm text-white placeholder:text-zinc-400 focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+          />
+          {searchQuery.trim() && (
+            <button
+              type="button"
+              onClick={() => onSearchChange('')}
+              aria-label="Clear search"
+              className="w-5 h-5 rounded-full inline-flex items-center justify-center text-zinc-400 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      </form>
+
+      <button
+        type="button"
+        onClick={() => {
+          setMenuOpen(false);
+          onShopNow();
+        }}
+        aria-label={`Shop Now (${availableCount} available)`}
+        title="Shop Now"
+        className="relative inline-flex items-center justify-center h-10 w-10 sm:w-auto sm:px-3.5 sm:gap-1.5 rounded-full bg-[#141418]/75 backdrop-blur-md border border-white/15 hover:border-white/35 text-zinc-100 hover:bg-[#1d1d22]/90 shadow-lg transition-colors shrink-0 cursor-pointer"
+      >
+        <ShoppingCart className="w-4 h-4 shrink-0" aria-hidden="true" />
+        <span className="hidden sm:inline text-xs font-semibold whitespace-nowrap">
+          Shop Now
+        </span>
+        <span
+          aria-hidden="true"
+          className="absolute -top-1.5 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#D92027] text-white text-[10px] font-bold flex items-center justify-center shadow ring-2 ring-[#0a0a0c] tabular-nums"
+        >
+          {availableCount}
+        </span>
+      </button>
+
       <button
         type="button"
         onClick={() => setMenuOpen((prev) => !prev)}
         aria-label={menuOpen ? 'Close menu' : 'Open menu'}
         aria-expanded={menuOpen}
-        className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-[#141418]/90 backdrop-blur-md border border-white/15 shadow-lg text-zinc-100 hover:bg-[#1d1d22] hover:border-white/30 transition-colors cursor-pointer"
+        className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-[#141418]/75 backdrop-blur-md border border-white/15 shadow-lg text-zinc-100 hover:bg-[#1d1d22]/90 hover:border-white/35 transition-colors shrink-0 cursor-pointer"
       >
         {menuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
       </button>
 
-      {/* Dark Hamburger Menu Drawer */}
       {menuOpen && (
         <div className="absolute right-0 top-12 w-72 bg-[#141418] border border-zinc-800 rounded-xl shadow-2xl py-2 z-50">
           <div className="px-4 py-2.5 border-b border-zinc-800/80 mb-1 flex items-center gap-2.5">
@@ -87,10 +144,7 @@ export function Navbar({
             </div>
           </div>
 
-          <nav
-            aria-label="Menu navigation"
-            className="px-2 pb-2 mb-2 border-b border-zinc-800 flex flex-col gap-0.5"
-          >
+          <nav aria-label="Menu navigation" className="px-2 flex flex-col gap-0.5">
             {navItems.map((item) => (
               <button
                 key={item.id}
@@ -102,56 +156,9 @@ export function Navbar({
               </button>
             ))}
           </nav>
-
-          {/* Admin Access inside Hamburger Menu (Admin Dashboard hidden unless logged in by email) */}
-          <div className="px-2 space-y-1">
-            {adminEmail ? (
-              <>
-                <div className="px-3 py-2 text-xs text-zinc-400 border-b border-zinc-800 mb-1">
-                  <span className="block font-medium text-white">Signed in as Admin</span>
-                  <span className="block truncate">{adminEmail}</span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onToggleAdminView();
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm font-medium text-white hover:bg-zinc-800/80 rounded-lg cursor-pointer transition-colors"
-                >
-                  <ShieldCheck className="w-4 h-4 text-[#D92027]" aria-hidden="true" />
-                  <span>{isAdminView ? 'View Showroom' : 'Admin Dashboard'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onLogoutAdmin();
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm font-medium text-zinc-400 hover:bg-zinc-800/80 hover:text-white rounded-lg cursor-pointer transition-colors"
-                >
-                  <LogOut className="w-4 h-4" aria-hidden="true" />
-                  <span>Sign Out</span>
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onOpenAdminLogin();
-                }}
-                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm font-medium text-zinc-300 hover:bg-zinc-800/80 hover:text-white rounded-lg cursor-pointer transition-colors"
-              >
-                <Lock className="w-4 h-4 text-[#D92027]" aria-hidden="true" />
-                <span>Admin Login</span>
-              </button>
-            )}
-          </div>
         </div>
       )}
     </header>
   );
 }
+

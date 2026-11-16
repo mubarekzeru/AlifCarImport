@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import {
   Check,
   ChevronDown,
@@ -9,6 +9,7 @@ import {
   Film,
   Link2,
   Loader2,
+  LogOut,
   Play,
   Plus,
   RefreshCw,
@@ -22,7 +23,6 @@ import {
 } from 'lucide-react';
 import { PRESET_VEHICLE_PHOTOS } from '../data/seedData';
 import type {
-  CustomerInquiry,
   ShowroomStore,
   TikTokPost,
   Vehicle,
@@ -42,10 +42,7 @@ import {
   normalizeTikTokUrl,
   resolveTikTokAdminCardMode,
 } from '../utils/inventory';
-import {
-  fetchCustomerInquiries,
-  fetchTikTokVideoMetadata,
-} from '../utils/storeClient';
+import { fetchTikTokVideoMetadata } from '../utils/storeClient';
 import { SocialMediaIconRow } from './SocialIcons';
 import { VehicleFormModal } from './VehicleFormModal';
 
@@ -54,6 +51,7 @@ const DEFAULT_TIKTOK_CAPTION = 'Full interior and exterior showcase on our showr
 
 interface AdminDashboardProps {
   store: ShowroomStore;
+  adminEmail?: string | null;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
   saveError?: string | null;
   onUpdateStore: (
@@ -62,16 +60,19 @@ interface AdminDashboardProps {
   ) => Promise<boolean>;
   onResetDefaults?: () => void;
   onPublishAndView: (sectionId?: string) => Promise<void>;
+  onSignOut?: () => void;
 }
 
 type AdminTab = 'inventory' | 'posts' | 'tiktok' | 'contact';
 
 export function AdminDashboard({
   store,
+  adminEmail,
   saveState,
   saveError,
   onUpdateStore,
   onPublishAndView,
+  onSignOut,
 }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('inventory');
   const [searchQuery, setSearchQuery] = useState('');
@@ -79,7 +80,6 @@ export function AdminDashboard({
   const [formOpen, setFormOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [inquiries, setInquiries] = useState<CustomerInquiry[]>([]);
   const [tiktokFetchStatus, setTiktokFetchStatus] = useState<
     Record<string, { loading: boolean; error?: string; note?: string }>
   >({});
@@ -99,12 +99,6 @@ export function AdminDashboard({
     message: string;
     sectionId?: string;
   } | null>(null);
-
-  useEffect(() => {
-    if (activeTab === 'contact') {
-      fetchCustomerInquiries().then(setInquiries);
-    }
-  }, [activeTab]);
 
   const filteredInventory = filterVehicles(store.vehicles, {
     query: searchQuery,
@@ -680,8 +674,37 @@ export function AdminDashboard({
   };
 
   return (
-    <main className="min-h-[calc(100vh-4rem)] bg-[#0a0a0c] pt-16 pb-8 sm:pt-16 sm:pb-10 xl:py-10 text-zinc-100">
+    <main className="min-h-screen bg-[#0a0a0c] py-8 sm:py-10 text-zinc-100">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-zinc-800">
+          <div className="text-xs text-zinc-400">
+            {adminEmail && (
+              <span>
+                Signed in as <strong className="text-zinc-200 font-medium">{adminEmail}</strong>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void onPublishAndView()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-zinc-700 hover:border-white text-xs font-medium text-zinc-200 hover:text-white transition-colors cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>View Showroom</span>
+            </button>
+            {onSignOut && (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-zinc-800 hover:border-red-700 text-xs font-medium text-zinc-300 hover:text-red-300 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Sign Out</span>
+              </button>
+            )}
+          </div>
+        </div>
         {(uploadNotice || (saveState === 'error' && saveError)) && (
           <div
             role={uploadNotice?.type === 'error' || saveState === 'error' ? 'alert' : 'status'}
@@ -1883,8 +1906,8 @@ export function AdminDashboard({
 
         {/* TAB 4: LOCATION & CONTACT */}
         {activeTab === 'contact' && (
-          <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-7 bg-[#141418] border border-zinc-800 rounded-xl p-6 space-y-4">
+          <section className="max-w-4xl">
+            <div className="bg-[#141418] border border-zinc-800 rounded-xl p-6 space-y-4">
               <div>
                 <h2 className="font-display text-lg font-semibold text-white">
                   Showroom Location & Contact Details
@@ -2199,45 +2222,6 @@ export function AdminDashboard({
                   </button>
                 </div>
               </div>
-            </div>
-
-            {/* Customer Inquiries Panel */}
-            <div className="lg:col-span-5 bg-[#141418] border border-zinc-800 rounded-xl p-6 space-y-4 h-fit">
-              <div>
-                <h2 className="font-display text-lg font-semibold text-white">
-                  Recent Customer Inquiries
-                </h2>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Messages submitted from your storefront contact form.
-                </p>
-              </div>
-
-              {inquiries.length === 0 ? (
-                <p className="text-sm text-zinc-400 py-4 border-t border-zinc-800">
-                  No customer inquiries submitted yet.
-                </p>
-              ) : (
-                <div className="divide-y divide-zinc-800 border-t border-zinc-800 max-h-[420px] overflow-y-auto">
-                  {inquiries.map((inq) => (
-                    <div key={inq.id} className="py-3.5 space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-white">{inq.name}</span>
-                        <span className="text-xs font-mono text-zinc-400 tabular-nums">
-                          {inq.phone}
-                        </span>
-                      </div>
-                      {inq.vehicleTitle && (
-                        <p className="text-xs font-medium text-[#D92027]">
-                          Vehicle: {inq.vehicleTitle}
-                        </p>
-                      )}
-                      {inq.message && (
-                        <p className="text-xs text-zinc-300 leading-relaxed">{inq.message}</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </section>
         )}

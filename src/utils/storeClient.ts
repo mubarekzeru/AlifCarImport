@@ -63,11 +63,11 @@ export async function checkAdminSession(extraAdminEmails?: string[]): Promise<{
       if (json.authenticated && json.email) {
         return { authenticated: true, email: json.email };
       }
-      if (stored?.mode === 'local' && isAuthorizedAdminEmail(stored.email, extraAdminEmails)) {
-        return { authenticated: true, email: stored.email };
-      }
-      return { authenticated: false, email: null };
     }
+    if (stored?.mode === 'local' && isAuthorizedAdminEmail(stored.email, extraAdminEmails)) {
+      return { authenticated: true, email: stored.email };
+    }
+    return { authenticated: false, email: null };
   } catch {
     if (stored && isAuthorizedAdminEmail(stored.email, extraAdminEmails)) {
       return { authenticated: true, email: stored.email };

@@ -15,6 +15,11 @@ import {
   buildWhatsAppHref,
   buildSocialMediaUrl,
   getConfiguredSocialLinks,
+  getVehicleGalleryImages,
+  getRelatedShowroomVehicles,
+  getSimilarVehicles,
+  getVehiclePricingBreakdown,
+  getAvailableColorSwatches,
   isAuthorizedAdminEmail,
 } from './inventory';
 import type { Vehicle } from '../types/showroom';
@@ -332,6 +337,138 @@ test('formatVehicleTileModel strips leading year and make cleanly', () => {
       year: 2024,
     }),
     'Tucson Hybrid SEL'
+  );
+});
+
+test('getVehicleGalleryImages deduplicates primary and gallery images while preserving order', () => {
+  const images = getVehicleGalleryImages({
+    imageUrl: 'https://example.com/main.jpg',
+    galleryImages: [
+      'https://example.com/main.jpg',
+      ' https://example.com/interior.jpg ',
+      '',
+      'https://example.com/engine.jpg',
+      'https://example.com/interior.jpg',
+    ],
+  });
+
+  assert.deepEqual(images, [
+    'https://example.com/main.jpg',
+    'https://example.com/interior.jpg',
+    'https://example.com/engine.jpg',
+  ]);
+});
+
+test('getRelatedShowroomVehicles excludes current vehicle and prioritizes available & same make first', () => {
+  const vehicles: Vehicle[] = [
+    ...SAMPLE_VEHICLES,
+    {
+      ...SAMPLE_VEHICLES[0],
+      id: 'v4',
+      title: '2024 Toyota RAV4 Hybrid',
+      make: 'Toyota',
+      model: 'RAV4',
+      status: 'available',
+    },
+    {
+      ...SAMPLE_VEHICLES[0],
+      id: 'v5',
+      title: '2022 Toyota Prado TXL',
+      make: 'Toyota',
+      model: 'Prado',
+      status: 'sold',
+    },
+  ];
+
+  const related = getRelatedShowroomVehicles(vehicles, vehicles[0]);
+  assert.equal(related.some((v) => v.id === vehicles[0].id), false);
+  // Available same-make ('v3', 'v4') appear before reserved ('v2') and sold ('v5')
+  assert.deepEqual(
+    related.map((v) => v.id),
+    ['v3', 'v4', 'v2', 'v5']
+  );
+});
+
+test('getSimilarVehicles matches exact same make or origin excluding current vehicle', () => {
+  const vehicles: Vehicle[] = [
+    ...SAMPLE_VEHICLES,
+    {
+      ...SAMPLE_VEHICLES[1],
+      id: 'v4',
+      title: '2024 Porsche Cayenne S',
+      make: 'Porsche',
+      model: 'Cayenne',
+      origin: 'Germany Import',
+      status: 'available',
+    },
+    {
+      ...SAMPLE_VEHICLES[0],
+      id: 'v5',
+      title: '2023 Nissan Patrol',
+      make: 'Nissan',
+      model: 'Patrol',
+      origin: 'Japan Import',
+      status: 'available',
+    },
+  ];
+
+  // Current is v1 (Toyota, Japan Import): matches v3 (Toyota) and v5 (Japan Import), excluding v1
+  const similarToV1 = getSimilarVehicles(vehicles, vehicles[0]);
+  assert.deepEqual(
+    similarToV1.map((v) => v.id),
+    ['v3', 'v5']
+  );
+
+  // Current is v2 (Mercedes-Benz, Germany Import): matches v4 (Germany Import)
+  const similarToV2 = getSimilarVehicles(vehicles, vehicles[1]);
+  assert.deepEqual(
+    similarToV2.map((v) => v.id),
+    ['v4']
+  );
+});
+
+test('getVehiclePricingBreakdown calculates savings and percentage when originalPrice exceeds price', () => {
+  const discounted = getVehiclePricingBreakdown({ price: 3922, originalPrice: 4276 });
+  assert.deepEqual(discounted, {
+    originalPrice: 4276,
+    finalPrice: 3922,
+    discountAmount: 354,
+    discountPercent: 8,
+    hasDiscount: true,
+  });
+
+  const standard = getVehiclePricingBreakdown({ price: 68900 });
+  assert.deepEqual(standard, {
+    originalPrice: 68900,
+    finalPrice: 68900,
+    discountAmount: 0,
+    discountPercent: 0,
+    hasDiscount: false,
+  });
+});
+
+test('getAvailableColorSwatches returns only colors present on currently available vehicles', () => {
+  const swatches = getAvailableColorSwatches([
+    { color: 'Pearl White', status: 'available' },
+    { color: 'Sonic Titanium Silver', status: 'available' },
+    { color: 'Obsidian Black Metallic', status: 'reserved' },
+    { color: 'Cobalt Blue', status: 'sold' },
+    { color: 'Carmine Red', status: 'available' },
+  ]);
+
+  assert.deepEqual(
+    swatches.map((s) => ({ label: s.label, query: s.query })),
+    [
+      { label: 'All Colors', query: '' },
+      { label: 'Pearl White', query: 'White' },
+      { label: 'Carmine Red', query: 'Red' },
+      { label: 'Titanium Silver', query: 'Silver' },
+    ]
+  );
+
+  assert.deepEqual(
+    getAvailableColorSwatches([{ color: 'Pearl White', status: 'sold' }]),
+    []
   );
 });
 
