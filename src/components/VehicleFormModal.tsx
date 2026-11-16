@@ -115,7 +115,7 @@ export function VehicleFormModal({
     setUploadError('');
     setUploading(true);
     try {
-      const dataUrl = await readFileAsResizedDataUrl(file, 1280, 0.85);
+      const dataUrl = await readFileAsResizedDataUrl(file, 1120, 0.8, 260_000);
       setImageUrl(dataUrl);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Failed to load photo.');
@@ -129,14 +129,20 @@ export function VehicleFormModal({
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
     setUploadError('');
+    const remainingSlots = Math.max(0, 10 - galleryImages.length);
+    if (remainingSlots === 0) {
+      setUploadError('Maximum of 10 additional photos per vehicle reached.');
+      e.target.value = '';
+      return;
+    }
     setUploading(true);
     try {
       const uploaded: string[] = [];
-      for (const file of files.slice(0, 12)) {
-        const dataUrl = await readFileAsResizedDataUrl(file, 1280, 0.82);
+      for (const file of files.slice(0, remainingSlots)) {
+        const dataUrl = await readFileAsResizedDataUrl(file, 880, 0.72, 130_000);
         uploaded.push(dataUrl);
       }
-      setGalleryImages((prev) => [...prev, ...uploaded]);
+      setGalleryImages((prev) => [...prev, ...uploaded].slice(0, 10));
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Failed to load gallery photo.');
     } finally {
@@ -253,7 +259,7 @@ export function VehicleFormModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
+        <form onSubmit={handleSubmit} className="p-6 pb-0 space-y-6">
           {/* Photo upload + preview */}
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-5 items-start">
             <div className="sm:col-span-5">
@@ -642,7 +648,7 @@ export function VehicleFormModal({
             </div>
           </div>
 
-          <div className="pt-4 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <div className="sticky bottom-0 z-10 -mx-6 px-6 py-4 bg-[#141418]/95 backdrop-blur-sm border-t border-zinc-800 flex items-center justify-end gap-3">
             <button
               type="button"
               onClick={onClose}
@@ -652,9 +658,14 @@ export function VehicleFormModal({
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 bg-[#D92027] hover:bg-[#B91C1C] text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
+              disabled={uploading}
+              className="px-5 py-2.5 bg-[#D92027] hover:bg-[#B91C1C] disabled:opacity-60 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
             >
-              {initialVehicle ? 'Save Changes' : 'Publish Vehicle'}
+              {uploading
+                ? 'Processing Photos...'
+                : initialVehicle
+                ? 'Save Changes'
+                : 'Publish Vehicle'}
             </button>
           </div>
         </form>

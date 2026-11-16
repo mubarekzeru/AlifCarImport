@@ -1,7 +1,30 @@
+function encodeCanvasWithinBudget(
+  canvas: HTMLCanvasElement,
+  preferPng: boolean,
+  initialQuality: number,
+  maxDataUrlChars: number
+): string {
+  if (preferPng) {
+    const pngUrl = canvas.toDataURL('image/png');
+    if (pngUrl.length <= maxDataUrlChars) {
+      return pngUrl;
+    }
+  }
+
+  let quality = Math.min(Math.max(initialQuality, 0.45), 0.92);
+  let dataUrl = canvas.toDataURL('image/jpeg', quality);
+  while (dataUrl.length > maxDataUrlChars && quality > 0.42) {
+    quality = Math.max(0.4, quality - 0.12);
+    dataUrl = canvas.toDataURL('image/jpeg', quality);
+  }
+  return dataUrl;
+}
+
 export function readFileAsResizedDataUrl(
   file: File,
-  maxWidth = 1280,
-  quality = 0.85
+  maxWidth = 1200,
+  quality = 0.82,
+  maxDataUrlChars = 320_000
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!file.type.startsWith('image/')) {
@@ -16,8 +39,8 @@ export function readFileAsResizedDataUrl(
       img.onerror = () => reject(new Error('Selected file could not be decoded as an image.'));
       img.onload = () => {
         const scale = img.width > maxWidth ? maxWidth / img.width : 1;
-        const targetWidth = Math.round(img.width * scale);
-        const targetHeight = Math.round(img.height * scale);
+        const targetWidth = Math.max(1, Math.round(img.width * scale));
+        const targetHeight = Math.max(1, Math.round(img.height * scale));
 
         const canvas = document.createElement('canvas');
         canvas.width = targetWidth;
@@ -33,8 +56,8 @@ export function readFileAsResizedDataUrl(
         ctx.fillRect(0, 0, targetWidth, targetHeight);
         ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
 
-        const outputType = file.type === 'image/png' && targetWidth <= 512 ? 'image/png' : 'image/jpeg';
-        resolve(canvas.toDataURL(outputType, quality));
+        const preferPng = file.type === 'image/png' && targetWidth <= 400;
+        resolve(encodeCanvasWithinBudget(canvas, preferPng, quality, maxDataUrlChars));
       };
       img.src = String(reader.result);
     };
@@ -51,7 +74,7 @@ export interface VideoFrameCandidate {
 export function extractFramesFromVideoFile(
   file: File,
   frameCount = 4,
-  maxWidth = 960
+  maxWidth = 880
 ): Promise<VideoFrameCandidate[]> {
   return new Promise((resolve, reject) => {
     if (!file.type.startsWith('video/')) {
@@ -87,8 +110,8 @@ export function extractFramesFromVideoFile(
       const vw = video.videoWidth || 720;
       const vh = video.videoHeight || 1280;
       const scale = vw > maxWidth ? maxWidth / vw : 1;
-      const targetWidth = Math.round(vw * scale);
-      const targetHeight = Math.round(vh * scale);
+      const targetWidth = Math.max(1, Math.round(vw * scale));
+      const targetHeight = Math.max(1, Math.round(vh * scale));
 
       const canvas = document.createElement('canvas');
       canvas.width = targetWidth;
@@ -121,7 +144,7 @@ export function extractFramesFromVideoFile(
           });
 
           ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          const dataUrl = encodeCanvasWithinBudget(canvas, false, 0.78, 280_000);
           const secs = Math.round(ts * 10) / 10;
           candidates.push({
             label: `Frame ${secs}s`,

@@ -351,7 +351,7 @@ export function validateVehicleInput(input: {
   return errors;
 }
 
-export const DEFAULT_ADMIN_EMAILS = ['mubyzeru@gmail.com', 'admin@alifcarimport.com'];
+export const DEFAULT_ADMIN_EMAILS = ['alifcarimports@gmail.com'];
 
 export function isAuthorizedAdminEmail(
   rawEmail: string,

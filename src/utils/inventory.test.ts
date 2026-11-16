@@ -193,9 +193,9 @@ test('buildWhatsAppHref strips formatting characters and encodes message', () =>
 });
 
 test('isAuthorizedAdminEmail validates authorized emails case-insensitively and rejects visitors', () => {
-  assert.equal(isAuthorizedAdminEmail('mubyzeru@gmail.com'), true);
-  assert.equal(isAuthorizedAdminEmail('  MUBYZERU@GMAIL.COM  '), true);
-  assert.equal(isAuthorizedAdminEmail('admin@alifcarimport.com'), true);
+  assert.equal(isAuthorizedAdminEmail('alifcarimports@gmail.com'), true);
+  assert.equal(isAuthorizedAdminEmail('  AlifCarImports@gmail.com  '), true);
+  assert.equal(isAuthorizedAdminEmail('mubyzeru@gmail.com'), false);
   assert.equal(isAuthorizedAdminEmail('visitor@example.com'), false);
   assert.equal(isAuthorizedAdminEmail(''), false);
   assert.equal(isAuthorizedAdminEmail('team@alifcarimport.com', ['team@alifcarimport.com']), true);

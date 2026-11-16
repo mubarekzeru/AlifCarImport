@@ -15,7 +15,7 @@ const TIKTOK_COVERS_DIR = path.join(DATA_DIR, 'tiktok-covers');
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
 const INQUIRIES_PATH = path.join(DATA_DIR, 'inquiries.json');
 
-const DEFAULT_ADMIN_EMAILS = ['mubyzeru@gmail.com', 'admin@alifcarimport.com'];
+const DEFAULT_ADMIN_EMAILS = ['alifcarimports@gmail.com'];
 const SESSION_COOKIE_NAME = 'alif_admin_session';
 const SESSION_SECRET =
   process.env.SESSION_SECRET || crypto.createHash('sha256').update(DATA_DIR).digest('hex');

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ArrowLeft, Lock, Mail } from 'lucide-react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { ArrowLeft, Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -13,19 +14,27 @@ import { TikTokShowcase } from './components/TikTokShowcase';
 import { VehicleCard } from './components/VehicleCard';
 import { VehicleDetailPage } from './components/VehicleDetailPage';
 import { INITIAL_SHOWROOM_STORE } from './data/seedData';
+import { auth, formatFirestoreUserMessage } from './firebase';
 import type { ShowroomStore, Vehicle, VehicleFilters, VehicleStatus } from './types/showroom';
+import {
+  fetchAdminAllowlistFromFirestore,
+  subscribeShowroomFromFirestore,
+} from './utils/firestoreStore';
 import {
   filterVehicles,
   getAvailableColorSwatches,
   getFilterOptions,
+  isAuthorizedAdminEmail,
 } from './utils/inventory';
 import {
-  checkAdminSession,
+  cacheShowroomStoreLocally,
+  ensureFirestoreSeeded,
   loadShowroomStore,
-  loginAdminByEmail,
   logoutAdmin,
   resetShowroomStore,
   saveShowroomStore,
+  signInAdminWithEmailPassword,
+  signInAdminWithGoogle,
 } from './utils/storeClient';
 
 const INITIAL_FILTERS: VehicleFilters = {
@@ -135,22 +144,31 @@ function AdminLoginView({
   onBackToShowroom: () => void;
 }) {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handlePasswordSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    const trimmed = email.trim();
-    if (!trimmed) {
-      setError('Please enter your admin email address.');
-      return;
-    }
-
     setSubmitting(true);
     try {
-      const session = await loginAdminByEmail(trimmed, authorizedEmails);
-      setEmail('');
+      const session = await signInAdminWithEmailPassword(email, password, authorizedEmails);
+      setPassword('');
+      onAuthenticated(session.email);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to sign in.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError('');
+    setSubmitting(true);
+    try {
+      const session = await signInAdminWithGoogle(authorizedEmails);
       onAuthenticated(session.email);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign in.');
@@ -188,9 +206,11 @@ function AdminLoginView({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handlePasswordSubmit} className="p-6 space-y-4">
           <p className="text-sm text-zinc-400 leading-relaxed">
-            Enter your authorized {companyName} administrator email to access inventory and content controls.
+            Sign in with your authorized {companyName} administrator account (
+            <span className="text-zinc-200 font-medium">alifcarimports@gmail.com</span>) to publish
+            live updates to all visitors.
           </p>
 
           <div>
@@ -207,16 +227,54 @@ function AdminLoginView({
                 type="email"
                 required
                 autoFocus
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
+                placeholder="alifcarimports@gmail.com"
                 className="w-full h-11 pl-9 pr-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#D92027]"
               />
             </div>
           </div>
 
+          <div>
+            <label htmlFor="admin-login-password" className="block text-xs font-medium text-zinc-300 mb-1.5">
+              Password *
+            </label>
+            <div className="relative">
+              <Lock
+                className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                id="admin-login-password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter admin password"
+                className="w-full h-11 pl-9 pr-10 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#D92027]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-white cursor-pointer"
+              >
+                {showPassword ? (
+                  <EyeOff className="w-4 h-4" aria-hidden="true" />
+                ) : (
+                  <Eye className="w-4 h-4" aria-hidden="true" />
+                )}
+              </button>
+            </div>
+          </div>
+
           {error && (
-            <p role="alert" className="text-xs font-medium text-[#D92027]">
+            <p
+              role="alert"
+              className="text-xs font-medium text-red-300 bg-red-950/50 border border-red-900/60 rounded-lg p-3 leading-relaxed"
+            >
               {error}
             </p>
           )}
@@ -226,7 +284,22 @@ function AdminLoginView({
             disabled={submitting}
             className="w-full h-11 bg-[#D92027] hover:bg-[#B91C1C] disabled:opacity-60 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
           >
-            {submitting ? 'Verifying...' : 'Sign In'}
+            {submitting ? 'Signing in...' : 'Sign In'}
+          </button>
+
+          <div className="flex items-center gap-3 py-1">
+            <span className="h-px flex-1 bg-zinc-800" />
+            <span className="text-[11px] uppercase tracking-wider text-zinc-500">or</span>
+            <span className="h-px flex-1 bg-zinc-800" />
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void handleGoogleSignIn()}
+            disabled={submitting}
+            className="w-full h-10 bg-[#1c1c21] hover:bg-zinc-800 border border-zinc-700 disabled:opacity-60 text-zinc-100 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+          >
+            Sign in with Google
           </button>
         </form>
       </div>
@@ -241,6 +314,7 @@ export default function App() {
 
   const [store, setStore] = useState<ShowroomStore>(INITIAL_SHOWROOM_STORE);
   const [loaded, setLoaded] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -250,21 +324,70 @@ export default function App() {
   const [orderedVehicleIds, setOrderedVehicleIds] = useState<string[]>(() => readStoredOrderIds());
   const saveTimerRef = useRef<number | null>(null);
   const storeRef = useRef<ShowroomStore>(INITIAL_SHOWROOM_STORE);
+  const lastSyncedStoreRef = useRef<ShowroomStore | null>(null);
 
   useEffect(() => {
     let active = true;
-    loadShowroomStore().then(async (data) => {
-      const session = await checkAdminSession(data.adminEmails);
+    loadShowroomStore().then((data) => {
       if (!active) return;
-      storeRef.current = data;
-      setStore(data);
-      setAdminEmail(session.authenticated ? session.email : null);
+      if (!lastSyncedStoreRef.current) {
+        storeRef.current = data;
+        setStore(data);
+      }
       setLoaded(true);
     });
+
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      if (!active) return;
+      if (user?.email && user.emailVerified) {
+        const remoteAllowlist = await fetchAdminAllowlistFromFirestore();
+        const allowed = isAuthorizedAdminEmail(user.email, [
+          ...(storeRef.current.adminEmails ?? []),
+          ...(remoteAllowlist ?? []),
+        ]);
+        if (!active) return;
+        if (allowed) {
+          setAdminEmail(user.email);
+          try {
+            await ensureFirestoreSeeded(storeRef.current);
+          } catch (err) {
+            setSaveState('error');
+            setSaveError(formatFirestoreUserMessage(err));
+          }
+        } else {
+          setAdminEmail(null);
+        }
+      } else {
+        setAdminEmail(null);
+      }
+      setAuthReady(true);
+    });
+
     return () => {
       active = false;
+      unsubAuth();
     };
   }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+    const unsubscribe = subscribeShowroomFromFirestore(
+      storeRef.current,
+      Boolean(adminEmail),
+      (remoteStore, hasRemoteShowroom) => {
+        cacheShowroomStoreLocally(remoteStore);
+        storeRef.current = remoteStore;
+        if (hasRemoteShowroom) {
+          lastSyncedStoreRef.current = remoteStore;
+        }
+        setStore(remoteStore);
+        setLoaded(true);
+      }
+    );
+    return () => {
+      unsubscribe();
+    };
+  }, [authReady, adminEmail]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
@@ -278,17 +401,21 @@ export default function App() {
     }
   }, [orderedVehicleIds]);
 
-  const persistStoreNow = async (targetStore: ShowroomStore): Promise<boolean> => {
+  const persistStoreNow = async (
+    targetStore: ShowroomStore,
+    prevStoreSnapshot: ShowroomStore | null
+  ): Promise<boolean> => {
     setSaveState('saving');
     setSaveError(null);
     try {
-      await saveShowroomStore(targetStore);
+      await saveShowroomStore(targetStore, prevStoreSnapshot);
+      lastSyncedStoreRef.current = targetStore;
       setSaveState('saved');
       return true;
     } catch (err) {
       setSaveState('error');
       setSaveError(
-        err instanceof Error ? err.message : 'Unable to publish changes to server.'
+        err instanceof Error ? err.message : 'Unable to publish changes to Firebase.'
       );
       return false;
     }
@@ -299,6 +426,7 @@ export default function App() {
     immediate = false
   ): Promise<boolean> => {
     if (!adminEmail) return false;
+    const prevSnapshot = lastSyncedStoreRef.current;
     const nextStore =
       typeof nextStoreOrUpdater === 'function'
         ? nextStoreOrUpdater(storeRef.current)
@@ -315,12 +443,12 @@ export default function App() {
     }
 
     if (immediate) {
-      return persistStoreNow(nextStore);
+      return persistStoreNow(nextStore, prevSnapshot);
     }
 
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
-      void persistStoreNow(storeRef.current);
+      void persistStoreNow(storeRef.current, lastSyncedStoreRef.current);
     }, 250);
     return true;
   };
@@ -332,6 +460,7 @@ export default function App() {
     try {
       const fresh = await resetShowroomStore();
       storeRef.current = fresh;
+      lastSyncedStoreRef.current = fresh;
       setStore(fresh);
       setSaveState('saved');
     } catch (err) {
@@ -875,7 +1004,7 @@ export default function App() {
                           window.clearTimeout(saveTimerRef.current);
                           saveTimerRef.current = null;
                         }
-                        await persistStoreNow(storeRef.current);
+                        await persistStoreNow(storeRef.current, lastSyncedStoreRef.current);
                         navigate('/');
                         if (sectionId) {
                           window.setTimeout(() => {

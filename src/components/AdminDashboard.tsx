@@ -36,7 +36,6 @@ import {
   deriveTitleFromVideoDescription,
   extractTikTokVideoId,
   filterVehicles,
-  formatPrice,
   getConfiguredSocialLinks,
   isTikTokVideoUrl,
   normalizeTikTokUrl,
@@ -63,7 +62,7 @@ interface AdminDashboardProps {
   onSignOut?: () => void;
 }
 
-type AdminTab = 'inventory' | 'posts' | 'tiktok' | 'contact';
+type AdminTab = 'inventory' | 'tiktok' | 'contact';
 
 export function AdminDashboard({
   store,
@@ -774,7 +773,6 @@ export function AdminDashboard({
           {(
             [
               { id: 'inventory', label: 'Inventory Manager' },
-              { id: 'posts', label: 'Photo, Post Title & Write-up' },
               { id: 'tiktok', label: 'TikTok Video Links' },
               { id: 'contact', label: 'Location & Contact' },
             ] as const
@@ -1015,88 +1013,7 @@ export function AdminDashboard({
           </section>
         )}
 
-        {/* TAB 2: PHOTO, POST TITLE & WRITE-UP */}
-        {activeTab === 'posts' && (
-          <section>
-            {/* Featured Vehicles Spotlight Photo & Link Quick Editor */}
-            <div className="bg-[#141418] border border-zinc-800 rounded-xl p-6 space-y-4">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <h2 className="font-display text-base font-semibold text-white">
-                    Featured Vehicles &amp; Photos
-                  </h2>
-                  <p className="text-xs text-zinc-400 mt-0.5">
-                    Update photos, titles, or TikTok links on featured spotlight vehicles.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('inventory')}
-                  className="text-xs font-medium text-[#D92027] hover:underline cursor-pointer shrink-0"
-                >
-                  All Inventory
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {(store.vehicles.filter((v) => v.featured).length > 0
-                  ? store.vehicles.filter((v) => v.featured)
-                  : store.vehicles.slice(0, 2)
-                ).map((vehicle) => (
-                  <div
-                    key={vehicle.id}
-                    className="p-3 rounded-lg border border-zinc-800 bg-[#1c1c21] flex items-center gap-3"
-                  >
-                    <img
-                      src={vehicle.imageUrl}
-                      alt={vehicle.title}
-                      referrerPolicy="no-referrer"
-                      className="w-16 h-12 rounded-md object-cover border border-zinc-700 shrink-0"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-white truncate">
-                        {vehicle.title}
-                      </p>
-                      <p className="text-[11px] text-zinc-400 truncate">
-                        {vehicle.featured ? 'Featured Spotlight' : 'Spotlight Fallback'} · {formatPrice(vehicle.price)}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <label className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#D92027] hover:bg-[#B91C1C] text-white text-[11px] font-medium rounded-md cursor-pointer">
-                        <Upload className="w-3 h-3" aria-hidden="true" />
-                        <span>Upload</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) =>
-                            handleUploadImageForField(
-                              e,
-                              (url) => handleQuickVehiclePhoto(vehicle.id, url),
-                              `${vehicle.title} photo`
-                            )
-                          }
-                          className="sr-only"
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingVehicle(vehicle);
-                          setFormOpen(true);
-                        }}
-                        className="px-2.5 py-1.5 border border-zinc-700 hover:border-white text-[11px] font-medium text-zinc-200 hover:text-white rounded-md cursor-pointer"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* TAB 3: TIKTOK VIDEO LINKS */}
+        {/* TAB 2: TIKTOK VIDEO LINKS */}
         {activeTab === 'tiktok' && (
           <section className="space-y-5">
             <div className="flex items-center justify-start">
@@ -1510,25 +1427,6 @@ export function AdminDashboard({
                           </a>
                         )}
                       </div>
-                    </div>
-
-                    <div>
-                      <label
-                        htmlFor={`tt-cover-url-${post.id}`}
-                        className="block text-[11px] font-medium text-zinc-400 mb-1"
-                      >
-                        Cover Image URL
-                      </label>
-                      <input
-                        id={`tt-cover-url-${post.id}`}
-                        type="text"
-                        value={post.coverImageUrl}
-                        onChange={(e) =>
-                          void handleUpdateTikTokPost(post.id, { coverImageUrl: e.target.value })
-                        }
-                        placeholder="https://... or uploaded image"
-                        className="w-full h-8 px-2.5 bg-[#1c1c21] border border-zinc-700 rounded-lg text-xs text-white focus:outline-none focus:border-[#D92027]"
-                      />
                     </div>
 
                     {coverOptions.length > 0 && (
@@ -2204,7 +2102,7 @@ export function AdminDashboard({
                         adminEmails: emails,
                       }));
                     }}
-                    placeholder="mubyzeru@gmail.com, admin@alifcarimport.com"
+                    placeholder="alifcarimports@gmail.com"
                     className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
                   />
                 </div>

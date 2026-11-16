@@ -320,5 +320,5 @@ export const INITIAL_SHOWROOM_STORE: ShowroomStore = {
     mapsUrl: 'https://maps.google.com/?q=Bole+Medhanialem+Addis+Ababa',
     landmarkNote: 'Opposite Harmony Hotel, Ground Floor Glass Showroom',
   },
-  adminEmails: ['mubyzeru@gmail.com', 'admin@alifcarimport.com'],
+  adminEmails: ['alifcarimports@gmail.com'],
 };

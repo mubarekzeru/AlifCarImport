@@ -1,0 +1,328 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrapOwner() {
+      return isVerifiedUser() &&
+        request.auth.token.email is string &&
+        request.auth.token.email.lower() == 'alifcarimports@gmail.com';
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        isBootstrapOwner() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (
+          exists(/databases/$(database)/documents/config/adminAccess) &&
+          request.auth.token.email is string &&
+          get(/databases/$(database)/documents/config/adminAccess).data.adminEmails is list &&
+          request.auth.token.email.lower() in get(/databases/$(database)/documents/config/adminAccess).data.adminEmails
+        )
+      );
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidBranding(b) {
+      return b is map &&
+        b.keys().hasAll(['companyName', 'logoUrl', 'tagline']) &&
+        b.keys().hasOnly(['companyName', 'logoUrl', 'tagline']) &&
+        isValidString(b.companyName, 1, 120) &&
+        isValidString(b.logoUrl, 0, 550000) &&
+        isValidString(b.tagline, 0, 240);
+    }
+
+    function isValidHero(h) {
+      return h is map &&
+        h.keys().hasAll(['kicker', 'title', 'description', 'imageUrl', 'ctaLabel']) &&
+        h.keys().hasOnly(['kicker', 'title', 'description', 'imageUrl', 'ctaLabel']) &&
+        isValidString(h.kicker, 0, 120) &&
+        isValidString(h.title, 1, 200) &&
+        isValidString(h.description, 0, 1200) &&
+        isValidString(h.imageUrl, 0, 550000) &&
+        isValidString(h.ctaLabel, 1, 80);
+    }
+
+    function isValidTikTokConfig(t) {
+      return t is map &&
+        t.keys().hasAll(['title', 'description', 'profileUrl', 'handle']) &&
+        t.keys().hasOnly(['title', 'description', 'profileUrl', 'handle']) &&
+        isValidString(t.title, 1, 160) &&
+        isValidString(t.description, 0, 1200) &&
+        isValidString(t.profileUrl, 0, 500) &&
+        isValidString(t.handle, 0, 80);
+    }
+
+    function isValidContact(c) {
+      return c is map &&
+        c.keys().hasAll([
+          'addressLine',
+          'cityCountry',
+          'hours',
+          'phone',
+          'whatsapp',
+          'email',
+          'mapsUrl',
+          'landmarkNote'
+        ]) &&
+        c.keys().hasOnly([
+          'addressLine',
+          'cityCountry',
+          'hours',
+          'phone',
+          'whatsapp',
+          'telegram',
+          'instagram',
+          'facebook',
+          'x',
+          'email',
+          'mapsUrl',
+          'landmarkNote'
+        ]) &&
+        isValidString(c.addressLine, 0, 240) &&
+        isValidString(c.cityCountry, 0, 160) &&
+        isValidString(c.hours, 0, 160) &&
+        isValidString(c.phone, 0, 60) &&
+        isValidString(c.whatsapp, 0, 200) &&
+        (!('telegram' in c) || isValidString(c.telegram, 0, 200)) &&
+        (!('instagram' in c) || isValidString(c.instagram, 0, 200)) &&
+        (!('facebook' in c) || isValidString(c.facebook, 0, 200)) &&
+        (!('x' in c) || isValidString(c.x, 0, 200)) &&
+        isValidString(c.email, 0, 254) &&
+        isValidString(c.mapsUrl, 0, 500) &&
+        isValidString(c.landmarkNote, 0, 240);
+    }
+
+    function isValidShowroomConfig(data) {
+      return data.keys().hasAll(['branding', 'hero', 'tiktok', 'contact', 'updatedAt']) &&
+        data.keys().hasOnly(['branding', 'hero', 'tiktok', 'contact', 'updatedAt']) &&
+        isValidBranding(data.branding) &&
+        isValidHero(data.hero) &&
+        isValidTikTokConfig(data.tiktok) &&
+        isValidContact(data.contact) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidAdminAccessConfig(data) {
+      return data.keys().hasAll(['adminEmails', 'updatedAt']) &&
+        data.keys().hasOnly(['adminEmails', 'updatedAt']) &&
+        data.adminEmails is list &&
+        data.adminEmails.size() <= 20 &&
+        (data.adminEmails.size() == 0 || (data.adminEmails[0] is string && data.adminEmails[0].size() <= 254)) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidAdminMembership(data) {
+      return data.keys().hasAll(['email', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['email', 'role', 'createdAt']) &&
+        isValidString(data.email, 3, 254) &&
+        data.role == 'admin' &&
+        data.createdAt == request.time;
+    }
+
+    function isValidVehicle(vehicleId, data) {
+      return data.keys().hasAll([
+          'id',
+          'title',
+          'make',
+          'model',
+          'year',
+          'price',
+          'mileage',
+          'transmission',
+          'fuelType',
+          'color',
+          'origin',
+          'imageUrl',
+          'description',
+          'tiktokUrl',
+          'status',
+          'featured',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'title',
+          'make',
+          'model',
+          'year',
+          'price',
+          'originalPrice',
+          'mileage',
+          'transmission',
+          'fuelType',
+          'color',
+          'origin',
+          'imageUrl',
+          'galleryImages',
+          'description',
+          'tiktokUrl',
+          'status',
+          'featured',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id == vehicleId &&
+        isValidId(data.id) &&
+        isValidString(data.title, 1, 200) &&
+        isValidString(data.make, 1, 80) &&
+        isValidString(data.model, 1, 120) &&
+        data.year is number && data.year >= 1950 && data.year <= 2100 &&
+        data.price is number && data.price >= 0 && data.price <= 100000000 &&
+        (!('originalPrice' in data) || (data.originalPrice is number && data.originalPrice >= 0 && data.originalPrice <= 100000000)) &&
+        isValidString(data.mileage, 0, 60) &&
+        isValidString(data.transmission, 0, 80) &&
+        isValidString(data.fuelType, 0, 80) &&
+        isValidString(data.color, 0, 80) &&
+        isValidString(data.origin, 0, 100) &&
+        isValidString(data.imageUrl, 1, 550000) &&
+        (!('galleryImages' in data) || (
+          data.galleryImages is list &&
+          data.galleryImages.size() <= 10 &&
+          (data.galleryImages.size() == 0 || (data.galleryImages[0] is string && data.galleryImages[0].size() <= 550000))
+        )) &&
+        isValidString(data.description, 1, 4000) &&
+        isValidString(data.tiktokUrl, 0, 500) &&
+        data.status in ['available', 'reserved', 'sold'] &&
+        data.featured is bool &&
+        isValidString(data.createdAt, 1, 64) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidTikTokPost(postId, data) {
+      return data.keys().hasAll(['id', 'title', 'caption', 'tiktokUrl', 'coverImageUrl', 'sortOrder', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'title', 'caption', 'tiktokUrl', 'coverImageUrl', 'sortOrder', 'updatedAt']) &&
+        data.id == postId &&
+        isValidId(data.id) &&
+        isValidString(data.title, 0, 200) &&
+        isValidString(data.caption, 0, 2000) &&
+        isValidString(data.tiktokUrl, 0, 500) &&
+        isValidString(data.coverImageUrl, 0, 550000) &&
+        data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 1000 &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidInquiry(inquiryId, data) {
+      return data.keys().hasAll(['id', 'name', 'phone', 'vehicleTitle', 'message', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'name', 'phone', 'email', 'vehicleTitle', 'message', 'createdAt']) &&
+        data.id == inquiryId &&
+        isValidId(data.id) &&
+        isValidString(data.name, 1, 120) &&
+        isValidString(data.phone, 1, 40) &&
+        (!('email' in data) || isValidString(data.email, 0, 254)) &&
+        isValidString(data.vehicleTitle, 0, 200) &&
+        isValidString(data.message, 1, 2000) &&
+        data.createdAt == request.time;
+    }
+
+    match /config/{configId} {
+      allow get: if isValidId(configId) && (
+        configId == 'showroom' ||
+        (configId == 'adminAccess' && isVerifiedUser() && isAdmin())
+      );
+      allow list: if false;
+      allow create: if isVerifiedUser() && isValidId(configId) && (
+        (configId == 'showroom' && isValidShowroomConfig(incoming())) ||
+        (configId == 'adminAccess' && isValidAdminAccessConfig(incoming()))
+      ) && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(configId) && (
+        (configId == 'showroom' && isValidShowroomConfig(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['branding', 'hero', 'tiktok', 'contact', 'updatedAt'])) ||
+        (configId == 'adminAccess' && isValidAdminAccessConfig(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['adminEmails', 'updatedAt']))
+      ) && isAdmin();
+      allow delete: if false;
+    }
+
+    match /admins/{uid} {
+      allow get: if isVerifiedUser() && isValidId(uid) && (request.auth.uid == uid || isBootstrapOwner());
+      allow list: if isBootstrapOwner();
+      allow create: if isValidId(uid) && isBootstrapOwner() && isValidAdminMembership(incoming());
+      allow update: if isValidId(uid) && isBootstrapOwner() && isValidAdminMembership(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role']);
+      allow delete: if isValidId(uid) && isBootstrapOwner();
+    }
+
+    match /vehicles/{vehicleId} {
+      allow get: if isValidId(vehicleId);
+      allow list: if true;
+      allow create: if isVerifiedUser() && isValidId(vehicleId) && isValidVehicle(vehicleId, incoming()) && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(vehicleId) && isValidVehicle(vehicleId, incoming()) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'title',
+          'make',
+          'model',
+          'year',
+          'price',
+          'originalPrice',
+          'mileage',
+          'transmission',
+          'fuelType',
+          'color',
+          'origin',
+          'imageUrl',
+          'galleryImages',
+          'description',
+          'tiktokUrl',
+          'status',
+          'featured',
+          'updatedAt'
+        ]) && isAdmin();
+      allow delete: if isVerifiedUser() && isValidId(vehicleId) && isAdmin();
+    }
+
+    match /tiktokPosts/{postId} {
+      allow get: if isValidId(postId);
+      allow list: if true;
+      allow create: if isVerifiedUser() && isValidId(postId) && isValidTikTokPost(postId, incoming()) && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(postId) && isValidTikTokPost(postId, incoming()) &&
+        incoming().id == existing().id &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'title',
+          'caption',
+          'tiktokUrl',
+          'coverImageUrl',
+          'sortOrder',
+          'updatedAt'
+        ]) && isAdmin();
+      allow delete: if isVerifiedUser() && isValidId(postId) && isAdmin();
+    }
+
+    match /inquiries/{inquiryId} {
+      allow get: if isVerifiedUser() && isValidId(inquiryId) && isAdmin();
+      allow list: if isBootstrapOwner();
+      allow create: if isValidId(inquiryId) && isValidInquiry(inquiryId, incoming());
+      allow update, delete: if false;
+    }
+  }
+}

@@ -1,0 +1,323 @@
+{
+  "entities": {
+    "ShowroomConfig": {
+      "title": "ShowroomConfig",
+      "description": "Public showroom branding, hero section copy/image, TikTok header metadata, and business contact links.",
+      "type": "object",
+      "properties": {
+        "branding": {
+          "type": "object",
+          "description": "Company name, logo URL/data URI, and tagline."
+        },
+        "hero": {
+          "type": "object",
+          "description": "Hero banner kicker, title, description, imageUrl, and CTA label."
+        },
+        "tiktok": {
+          "type": "object",
+          "description": "TikTok showcase title, description, profileUrl, and handle."
+        },
+        "contact": {
+          "type": "object",
+          "description": "Public dealership address, hours, phone, WhatsApp, email, mapsUrl, landmarkNote, and social handles."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when showroom config was last updated."
+        }
+      },
+      "required": ["branding", "hero", "tiktok", "contact", "updatedAt"]
+    },
+    "AdminAccessConfig": {
+      "title": "AdminAccessConfig",
+      "description": "Private admin access control configuration holding additional authorized administrator emails.",
+      "type": "object",
+      "properties": {
+        "adminEmails": {
+          "type": "array",
+          "description": "Lowercase email addresses authorized for showroom admin editing (max 20)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin access list was updated."
+        }
+      },
+      "required": ["adminEmails", "updatedAt"]
+    },
+    "AdminMembership": {
+      "title": "AdminMembership",
+      "description": "Explicit Firestore admin membership document keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254,
+          "description": "Verified Google account email address of the administrator."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"],
+          "maxLength": 16,
+          "description": "Administrative role granted."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin membership was granted."
+        }
+      },
+      "required": ["email", "role", "createdAt"]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Imported vehicle listing displayed on the showroom visitor dashboard and detail page.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Unique URL-safe vehicle identifier matching document ID."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Display title of the vehicle."
+        },
+        "make": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Vehicle manufacturer."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Vehicle model name."
+        },
+        "year": {
+          "type": "number",
+          "description": "Model year."
+        },
+        "price": {
+          "type": "number",
+          "description": "Final showroom asking price in USD."
+        },
+        "originalPrice": {
+          "type": "number",
+          "description": "Optional pre-discount price in USD."
+        },
+        "mileage": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Formatted odometer reading."
+        },
+        "transmission": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Transmission type."
+        },
+        "fuelType": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Fuel or powertrain type."
+        },
+        "color": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Exterior paint finish."
+        },
+        "origin": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Import source country or region."
+        },
+        "imageUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 550000,
+          "description": "Primary showroom cover photo URL or compressed data URI."
+        },
+        "galleryImages": {
+          "type": "array",
+          "description": "Additional gallery photo URLs or compressed data URIs (max 10)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "description": "Detailed vehicle inspection write-up."
+        },
+        "tiktokUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional TikTok walkaround video URL."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["available", "reserved", "sold"],
+          "maxLength": 16,
+          "description": "Current showroom availability status."
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Whether the vehicle is highlighted as featured."
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "ISO date or timestamp string when the vehicle was added."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest update."
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "make",
+        "model",
+        "year",
+        "price",
+        "mileage",
+        "transmission",
+        "fuelType",
+        "color",
+        "origin",
+        "imageUrl",
+        "description",
+        "tiktokUrl",
+        "status",
+        "featured",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TikTokPost": {
+      "title": "TikTokPost",
+      "description": "Curated TikTok showroom walkaround reel card.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Unique URL-safe post identifier."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Display title of the TikTok reel."
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Description or caption text."
+        },
+        "tiktokUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "TikTok video link."
+        },
+        "coverImageUrl": {
+          "type": "string",
+          "maxLength": 550000,
+          "description": "Cover thumbnail URL or compressed data URI."
+        },
+        "sortOrder": {
+          "type": "number",
+          "description": "Zero-based display order index."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when post was updated."
+        }
+      },
+      "required": ["id", "title", "caption", "tiktokUrl", "coverImageUrl", "sortOrder", "updatedAt"]
+    },
+    "CustomerInquiry": {
+      "title": "CustomerInquiry",
+      "description": "Customer vehicle inquiry submitted from the showroom.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Inquiry document ID."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Customer full name."
+        },
+        "phone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Customer phone number."
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 254,
+          "description": "Optional customer email address."
+        },
+        "vehicleTitle": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Vehicle of interest."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Inquiry message text."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when inquiry was submitted."
+        }
+      },
+      "required": ["id", "name", "phone", "vehicleTitle", "message", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/config/showroom": {
+      "schema": { "$ref": "#/entities/ShowroomConfig" },
+      "description": "Public showroom branding, hero banner, TikTok section copy, and business contact info."
+    },
+    "/config/adminAccess": {
+      "schema": { "$ref": "#/entities/AdminAccessConfig" },
+      "description": "Restricted admin-only email allowlist document."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminMembership" },
+      "description": "Admin role assignment documents keyed by Firebase Auth UID."
+    },
+    "/vehicles/{vehicleId}": {
+      "schema": { "$ref": "#/entities/Vehicle" },
+      "description": "Publicly readable, admin-writable showroom vehicle catalog."
+    },
+    "/tiktokPosts/{postId}": {
+      "schema": { "$ref": "#/entities/TikTokPost" },
+      "description": "Publicly readable, admin-writable TikTok walkaround showcase posts."
+    },
+    "/inquiries/{inquiryId}": {
+      "schema": { "$ref": "#/entities/CustomerInquiry" },
+      "description": "Write-once customer inquiries readable only by verified administrators."
+    }
+  }
+}
