@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ExternalLink, Film, Play, X } from 'lucide-react';
+import { motion } from 'motion/react';
 import type { TikTokSectionConfig } from '../types/showroom';
 import {
   deriveTitleFromVideoDescription,
@@ -7,6 +8,7 @@ import {
   filterActiveTikTokPosts,
   normalizeTikTokUrl,
 } from '../utils/inventory';
+import { ScrollReveal, SMOOTH_EASE } from './ScrollReveal';
 
 interface TikTokShowcaseProps {
   tiktok: TikTokSectionConfig;
@@ -33,7 +35,10 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
       className="scroll-mt-6 border-t border-zinc-800 bg-[#0d0d10] py-12 sm:py-14"
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <ScrollReveal
+          y={26}
+          className="flex flex-col sm:flex-row sm:items-end justify-between gap-4"
+        >
           <div className="space-y-1.5 max-w-2xl">
             <p className="text-xs font-semibold uppercase tracking-wider text-[#D92027]">
               Video Walkarounds · {tiktok.handle}
@@ -80,7 +85,7 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
               </a>
             )}
           </div>
-        </div>
+        </ScrollReveal>
 
         {activePosts.length === 0 ? (
           <div className="border border-zinc-800 bg-[#141418] rounded-xl p-8 text-center text-sm text-zinc-400">
@@ -104,7 +109,7 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
               data-testid="tiktok-carousel"
               className="flex overflow-x-auto snap-x snap-mandatory gap-2 sm:gap-5 pb-3 scroll-smooth"
             >
-              {activePosts.map((post) => {
+              {activePosts.map((post, idx) => {
                 const targetUrl = normalizeTikTokUrl(post.tiktokUrl) || tiktok.profileUrl;
                 const videoId = extractTikTokVideoId(targetUrl);
                 const isPlayingInline = Boolean(videoId && activeEmbedId === post.id);
@@ -160,9 +165,17 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
                 );
 
                 return (
-                  <article
+                  <motion.article
                     key={post.id}
                     data-testid={`tiktok-card-${post.id}`}
+                    initial={{ opacity: 0, y: 32 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true, amount: 0.1 }}
+                    transition={{
+                      duration: 0.48,
+                      delay: Math.min((idx % 4) * 0.065, 0.24),
+                      ease: SMOOTH_EASE,
+                    }}
                     className={`group shrink-0 snap-start ${cardWidthClass} bg-[#141418] border border-zinc-800 rounded-xl overflow-hidden transition-colors hover:border-zinc-600`}
                   >
                     <div
@@ -207,7 +220,7 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
                         </a>
                       )}
                     </div>
-                  </article>
+                  </motion.article>
                 );
               })}
             </div>

@@ -7,6 +7,7 @@ import { Footer } from './components/Footer';
 import { HeroSection } from './components/HeroSection';
 import { LocationContactSection } from './components/LocationContactSection';
 import { Navbar } from './components/Navbar';
+import { ScrollReveal } from './components/ScrollReveal';
 import { SearchFilterBar } from './components/SearchFilterBar';
 import { TikTokShowcase } from './components/TikTokShowcase';
 import { VehicleCard } from './components/VehicleCard';
@@ -37,15 +38,34 @@ const INITIAL_FILTERS: VehicleFilters = {
 type MatrixMode = 'make' | 'origin' | 'status';
 type ShowcaseTab = 'all' | 'featured' | 'available' | 'reserved';
 
+const ORDERS_STORAGE_KEY = 'alif_car_import_orders_v1';
+
+function readStoredOrderIds(): string[] {
+  try {
+    const raw = localStorage.getItem(ORDERS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 function CarDetailRoute({
   store,
   loaded,
+  orderedVehicleIds,
+  onPlaceOrder,
+  onRemoveOrder,
   onBackHome,
   onFilterByMake,
   onSelectVehicle,
 }: {
   store: ShowroomStore;
   loaded: boolean;
+  orderedVehicleIds: string[];
+  onPlaceOrder: (vehicle: Vehicle) => void;
+  onRemoveOrder: (vehicleId: string) => void;
   onBackHome: () => void;
   onFilterByMake: (make: string) => void;
   onSelectVehicle: (vehicle: Vehicle) => void;
@@ -91,6 +111,9 @@ function CarDetailRoute({
       allVehicles={store.vehicles}
       companyName={store.branding.companyName}
       contact={store.contact}
+      isInOrder={orderedVehicleIds.includes(vehicle.id)}
+      onPlaceOrder={onPlaceOrder}
+      onRemoveOrder={onRemoveOrder}
       onBackHome={onBackHome}
       onFilterByMake={onFilterByMake}
       onSelectVehicle={onSelectVehicle}
@@ -224,6 +247,7 @@ export default function App() {
   const [filters, setFilters] = useState<VehicleFilters>(INITIAL_FILTERS);
   const [matrixMode, setMatrixMode] = useState<MatrixMode>('make');
   const [showcaseTab, setShowcaseTab] = useState<ShowcaseTab>('all');
+  const [orderedVehicleIds, setOrderedVehicleIds] = useState<string[]>(() => readStoredOrderIds());
   const saveTimerRef = useRef<number | null>(null);
   const storeRef = useRef<ShowroomStore>(INITIAL_SHOWROOM_STORE);
 
@@ -245,6 +269,14 @@ export default function App() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   }, [location.pathname]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(orderedVehicleIds));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [orderedVehicleIds]);
 
   const persistStoreNow = async (targetStore: ShowroomStore): Promise<boolean> => {
     setSaveState('saving');
@@ -470,6 +502,26 @@ export default function App() {
     [store.vehicles]
   );
 
+  const orderedVehicles = useMemo(
+    () =>
+      orderedVehicleIds
+        .map((id) => store.vehicles.find((v) => v.id === id))
+        .filter((v): v is Vehicle => Boolean(v)),
+    [orderedVehicleIds, store.vehicles]
+  );
+
+  const handlePlaceOrder = (vehicle: Vehicle) => {
+    setOrderedVehicleIds((prev) => (prev.includes(vehicle.id) ? prev : [...prev, vehicle.id]));
+  };
+
+  const handleRemoveOrder = (vehicleId: string) => {
+    setOrderedVehicleIds((prev) => prev.filter((id) => id !== vehicleId));
+  };
+
+  const handleClearOrders = () => {
+    setOrderedVehicleIds([]);
+  };
+
   const navigateToSection = (sectionId: string) => {
     if (location.pathname !== '/') {
       navigate('/');
@@ -490,12 +542,16 @@ export default function App() {
       <div className="min-h-screen w-full flex flex-col bg-[#0a0a0c] text-zinc-100">
         {!isAdminRoute && (
           <Navbar
-            branding={store.branding}
+            companyName={store.branding.companyName}
+            contactPhone={store.contact.whatsapp || store.contact.phone}
             searchQuery={filters.query}
-            availableCount={availableCount}
+            orderedVehicles={orderedVehicles}
             onSearchChange={(query) => setFilters((prev) => ({ ...prev, query }))}
             onSearchSubmit={() => navigateToSection('inventory-grid')}
             onShopNow={() => navigateToSection('inventory-grid')}
+            onSelectVehicle={openVehicleRoute}
+            onRemoveOrder={handleRemoveOrder}
+            onClearOrders={handleClearOrders}
             onNavigateSection={navigateToSection}
           />
         )}
@@ -550,7 +606,10 @@ export default function App() {
 
                       {/* Select Vehicle By Brand / Origin / Status Matrix + Color Swatches */}
                       <div id="brand-showcase" className="scroll-mt-6 space-y-4">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <ScrollReveal
+                          y={24}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        >
                           <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-tight text-white">
                             Select Your Vehicle{' '}
                             <span className="font-normal text-zinc-400">
@@ -591,9 +650,13 @@ export default function App() {
                               </button>
                             ))}
                           </div>
-                        </div>
+                        </ScrollReveal>
 
-                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                        <ScrollReveal
+                          y={22}
+                          delay={0.05}
+                          className="flex flex-wrap items-center gap-1.5 sm:gap-2"
+                        >
                           {activeMatrixItems.map((item) => (
                             <button
                               key={item.key}
@@ -613,10 +676,14 @@ export default function App() {
                               </span>
                             </button>
                           ))}
-                        </div>
+                        </ScrollReveal>
 
                         {visibleColorSwatches.length > 0 && (
-                          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                          <ScrollReveal
+                            y={20}
+                            delay={0.09}
+                            className="flex items-center gap-2 overflow-x-auto pb-1"
+                          >
                             {visibleColorSwatches.map((swatch) => {
                               const isActive = swatch.isReset
                                 ? filters.query === ''
@@ -656,13 +723,16 @@ export default function App() {
                                 </button>
                               );
                             })}
-                          </div>
+                          </ScrollReveal>
                         )}
                       </div>
 
                       {/* Full Vehicle Showroom Grid */}
                       <div id="inventory-grid" className="scroll-mt-6 space-y-6">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <ScrollReveal
+                          y={24}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        >
                           <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-tight text-white">
                             Showroom{' '}
                             <span className="font-normal text-zinc-400">
@@ -699,7 +769,7 @@ export default function App() {
                               </button>
                             ))}
                           </div>
-                        </div>
+                        </ScrollReveal>
 
                         {!loaded && store.vehicles.length === 0 ? (
                           <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-3.5">
@@ -711,7 +781,10 @@ export default function App() {
                             ))}
                           </div>
                         ) : filteredVehicles.length === 0 ? (
-                          <div className="border border-zinc-800 rounded-xl p-12 text-center space-y-3 bg-[#141418]">
+                          <ScrollReveal
+                            y={24}
+                            className="border border-zinc-800 rounded-xl p-12 text-center space-y-3 bg-[#141418]"
+                          >
                             <h3 className="font-display text-lg font-semibold text-white">
                               No matching vehicles found
                             </h3>
@@ -728,7 +801,7 @@ export default function App() {
                             >
                               Show All Vehicles
                             </button>
-                          </div>
+                          </ScrollReveal>
                         ) : (
                           <div
                             data-testid="vehicle-grid"
@@ -766,6 +839,9 @@ export default function App() {
                   <CarDetailRoute
                     store={store}
                     loaded={loaded}
+                    orderedVehicleIds={orderedVehicleIds}
+                    onPlaceOrder={handlePlaceOrder}
+                    onRemoveOrder={handleRemoveOrder}
                     onBackHome={() => navigate('/')}
                     onFilterByMake={(make) => {
                       setFilters({ ...INITIAL_FILTERS, make });

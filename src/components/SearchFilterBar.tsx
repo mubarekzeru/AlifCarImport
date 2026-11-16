@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Car, ChevronDown, RotateCcw, Search, X } from 'lucide-react';
+import { motion } from 'motion/react';
 import type { Vehicle, VehicleFilters } from '../types/showroom';
 
 interface SearchFilterBarProps {
@@ -207,7 +208,13 @@ export function SearchFilterBar({
     .slice(0, 8);
 
   return (
-    <div className="bg-[#141418] border border-zinc-800 rounded-xl p-3 sm:p-4 shadow-2xl space-y-3">
+    <motion.div
+      initial={{ opacity: 0, y: 26 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, amount: 'some' }}
+      transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
+      className="bg-[#141418] border border-zinc-800 rounded-xl p-3 sm:p-4 shadow-2xl space-y-3"
+    >
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
         {/* Left Title Block matching Rvinyl "SHOP BY VEHICLE" */}
         <div className="lg:col-span-2 flex items-center justify-between lg:justify-start gap-2.5 px-1 sm:px-2 py-1">
@@ -389,6 +396,6 @@ export function SearchFilterBar({
           </button>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }

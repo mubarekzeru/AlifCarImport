@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import type { LocationContact, TikTokSectionConfig } from '../types/showroom';
 import { buildWhatsAppHref, getConfiguredSocialLinks } from '../utils/inventory';
+import { ScrollReveal } from './ScrollReveal';
 import { SocialMediaIconRow } from './SocialIcons';
 
 interface LocationContactSectionProps {
@@ -38,7 +39,7 @@ export function LocationContactSection({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
           {/* Left: Showroom Summary & Direct Order / Visit Actions */}
-          <div className="lg:col-span-5 space-y-5">
+          <ScrollReveal y={28} className="lg:col-span-5 space-y-5">
             <div className="flex items-center gap-3.5">
               {logoUrl && (
                 <img
@@ -81,10 +82,14 @@ export function LocationContactSection({
                 <span>Call Showroom</span>
               </a>
             </div>
-          </div>
+          </ScrollReveal>
 
           {/* Right: Showroom Location, Hours, Direct Contact & Social Links */}
-          <div className="lg:col-span-7 bg-[#141418] border border-zinc-800 rounded-xl p-6 sm:p-7 divide-y divide-zinc-800">
+          <ScrollReveal
+            y={32}
+            delay={0.08}
+            className="lg:col-span-7 bg-[#141418] border border-zinc-800 rounded-xl p-6 sm:p-7 divide-y divide-zinc-800"
+          >
             <div className="pb-4 grid grid-cols-1 sm:grid-cols-2 gap-6">
               <div className="flex items-start gap-3">
                 <MapPin className="w-5 h-5 text-[#D92027] shrink-0 mt-0.5" aria-hidden="true" />
@@ -164,7 +169,7 @@ export function LocationContactSection({
                 </div>
               </div>
             )}
-          </div>
+          </ScrollReveal>
         </div>
       </div>
     </section>

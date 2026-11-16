@@ -20,6 +20,7 @@ import {
   getSimilarVehicles,
   getVehiclePricingBreakdown,
   getAvailableColorSwatches,
+  splitDisplayBrandLines,
   isAuthorizedAdminEmail,
 } from './inventory';
 import type { Vehicle } from '../types/showroom';
@@ -472,3 +473,9 @@ test('getAvailableColorSwatches returns only colors present on currently availab
   );
 });
 
+test('splitDisplayBrandLines splits multi-word company names into balanced hero display lines', () => {
+  assert.deepEqual(splitDisplayBrandLines('Alif Car Import'), ['Alif Car', 'Import']);
+  assert.deepEqual(splitDisplayBrandLines('Alif Motors'), ['Alif', 'Motors']);
+  assert.deepEqual(splitDisplayBrandLines('Alif'), ['Alif']);
+  assert.deepEqual(splitDisplayBrandLines('   '), ['Alif Car', 'Import']);
+});

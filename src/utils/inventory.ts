@@ -780,3 +780,12 @@ export function getAvailableColorSwatches(
   ];
 }
 
+export function splitDisplayBrandLines(companyName: string): string[] {
+  const normalized = companyName.trim().replace(/\s+/g, ' ');
+  const words = (normalized || 'Alif Car Import').split(' ');
+  if (words.length <= 1) {
+    return [words[0]];
+  }
+  const splitIndex = Math.ceil(words.length / 2);
+  return [words.slice(0, splitIndex).join(' '), words.slice(splitIndex).join(' ')];
+}

@@ -21,6 +21,7 @@ import {
   getVehicleGalleryImages,
   getVehiclePricingBreakdown,
 } from '../utils/inventory';
+import { ScrollReveal } from './ScrollReveal';
 import { VehicleCard } from './VehicleCard';
 
 interface VehicleDetailPageProps {
@@ -28,6 +29,9 @@ interface VehicleDetailPageProps {
   allVehicles: Vehicle[];
   companyName: string;
   contact: LocationContact;
+  isInOrder: boolean;
+  onPlaceOrder: (vehicle: Vehicle) => void;
+  onRemoveOrder: (vehicleId: string) => void;
   onBackHome: () => void;
   onFilterByMake: (make: string) => void;
   onSelectVehicle: (vehicle: Vehicle) => void;
@@ -40,6 +44,9 @@ export function VehicleDetailPage({
   allVehicles,
   companyName,
   contact,
+  isInOrder,
+  onPlaceOrder,
+  onRemoveOrder,
   onBackHome,
   onFilterByMake,
   onSelectVehicle,
@@ -158,7 +165,7 @@ export function VehicleDetailPage({
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
         {/* Top Navigation + Breadcrumb */}
-        <div className="space-y-3">
+        <ScrollReveal y={18} duration={0.4} className="space-y-3">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -220,12 +227,12 @@ export function VehicleDetailPage({
               <span className="tabular-nums">{vehicle.mileage}</span>
             </div>
           </div>
-        </div>
+        </ScrollReveal>
 
         {/* Two-Column Gallery + Pricing Breakdown & Specifications */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Left Column: Main Large Image + Thumbnails Row + Share Buttons */}
-          <div className="lg:col-span-7 space-y-3">
+          <ScrollReveal y={26} className="lg:col-span-7 space-y-3">
             <div className="relative aspect-[4/3] w-full rounded-xl overflow-hidden bg-zinc-950 border border-zinc-800">
               {currentImage ? (
                 <img
@@ -367,10 +374,10 @@ export function VehicleDetailPage({
                 <span>WhatsApp Share</span>
               </a>
             </div>
-          </div>
+          </ScrollReveal>
 
           {/* Right Column: Detailed Pricing Breakdown + Action Buttons + Specifications */}
-          <div className="lg:col-span-5 space-y-6">
+          <ScrollReveal y={30} delay={0.07} className="lg:col-span-5 space-y-6">
             <div className="bg-[#141418] border border-zinc-800 rounded-xl p-5 sm:p-6 space-y-5">
               {/* Pricing Breakdown (Original Price, Discount, Final Price) */}
               <div data-testid="pricing-breakdown" className="space-y-2.5 border-b border-zinc-800 pb-4">
@@ -416,15 +423,30 @@ export function VehicleDetailPage({
 
               {/* Action Buttons */}
               <div className="space-y-2.5">
-                <a
-                  href={orderNowHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full h-11 inline-flex items-center justify-center gap-2 px-5 bg-[#D92027] hover:bg-[#B91C1C] text-white text-sm font-semibold rounded-lg transition-colors"
-                >
-                  <ShoppingBag className="w-4 h-4" aria-hidden="true" />
-                  <span>Order Now</span>
-                </a>
+                {isInOrder ? (
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-11 inline-flex items-center justify-center gap-2 px-4 bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 text-sm font-semibold rounded-lg">
+                      <Check className="w-4 h-4 shrink-0" aria-hidden="true" />
+                      <span>Added to Order Bag</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveOrder(vehicle.id)}
+                      className="h-11 px-3.5 border border-zinc-700 hover:border-red-500/70 text-xs font-medium text-zinc-300 hover:text-red-400 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onPlaceOrder(vehicle)}
+                    className="w-full h-11 inline-flex items-center justify-center gap-2 px-5 bg-[#D92027] hover:bg-[#B91C1C] text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
+                  >
+                    <ShoppingBag className="w-4 h-4" aria-hidden="true" />
+                    <span>Order Now</span>
+                  </button>
+                )}
 
                 <div className="grid grid-cols-2 gap-2.5">
                   <a
@@ -511,7 +533,7 @@ export function VehicleDetailPage({
                 </p>
               </div>
             </div>
-          </div>
+          </ScrollReveal>
         </div>
 
         {/* Bottom Recommendation Section: Similar Vehicles (same make or origin, Top Sellers grid) */}
@@ -520,7 +542,10 @@ export function VehicleDetailPage({
             id="similar-vehicles"
             className="pt-8 border-t border-zinc-800 space-y-5"
           >
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <ScrollReveal
+              y={24}
+              className="flex flex-wrap items-center justify-between gap-3"
+            >
               <div>
                 <h2 className="font-display text-lg sm:text-2xl font-bold uppercase tracking-tight text-white">
                   {similarMatches.length > 0 ? 'Similar Vehicles' : 'Available Vehicles in Store'}
@@ -539,7 +564,7 @@ export function VehicleDetailPage({
               >
                 See all vehicles →
               </button>
-            </div>
+            </ScrollReveal>
 
             <div
               data-testid="detail-related-grid"
