@@ -267,13 +267,22 @@ export function AdminDashboard({
     }
   };
 
+  const isPlaceholderTikTokCover = (url?: string): boolean => {
+    const trimmed = (url ?? '').trim();
+    if (!trimmed) return true;
+    if (trimmed.startsWith('/src/assets/images/') || trimmed.includes('/assets/aistudio/')) {
+      return true;
+    }
+    return PRESET_VEHICLE_PHOTOS.some((preset) => preset.url === trimmed);
+  };
+
   const handleAddTikTokPost = () => {
     const nextPost: TikTokPost = {
       id: `tt_${Date.now()}`,
       title: DEFAULT_TIKTOK_TITLE,
       caption: DEFAULT_TIKTOK_CAPTION,
       tiktokUrl: '',
-      coverImageUrl: PRESET_VEHICLE_PHOTOS[0].url,
+      coverImageUrl: '',
     };
     setTiktokPostModes((prev) => ({ ...prev, [nextPost.id]: 'edit' }));
     setSelectedPublishedPostId(null);
@@ -390,10 +399,7 @@ export function AdminDashboard({
               hasCustomTitle && !forceOverwrite
                 ? current.title
                 : derivedTitle || current.title;
-            const hasCustomCover =
-              Boolean(current.coverImageUrl) &&
-              !current.coverImageUrl.startsWith('/src/assets/images/') &&
-              !current.coverImageUrl.includes('/assets/aistudio/');
+            const hasCustomCover = !isPlaceholderTikTokCover(current.coverImageUrl);
             const nextCover =
               hasCustomCover && !forceOverwrite
                 ? current.coverImageUrl
@@ -462,8 +468,7 @@ export function AdminDashboard({
     const needsMetadata =
       !post.title.trim() ||
       post.title === DEFAULT_TIKTOK_TITLE ||
-      !post.coverImageUrl ||
-      post.coverImageUrl.startsWith('/src/assets/images/');
+      isPlaceholderTikTokCover(post.coverImageUrl);
 
     if (needsMetadata && lastFetchedUrls[post.id] !== normalized) {
       try {
@@ -500,10 +505,9 @@ export function AdminDashboard({
             current.caption.trim() && current.caption !== DEFAULT_TIKTOK_CAPTION
               ? current.caption.trim()
               : fetchedDesc || current.caption;
-          const keepCover =
-            current.coverImageUrl && !current.coverImageUrl.startsWith('/src/assets/images/')
-              ? current.coverImageUrl
-              : fetchedCover || current.coverImageUrl;
+          const keepCover = !isPlaceholderTikTokCover(current.coverImageUrl)
+            ? current.coverImageUrl
+            : fetchedCover || current.coverImageUrl;
 
           return {
             ...current,
@@ -1238,7 +1242,7 @@ export function AdminDashboard({
                                   { tiktokUrl: pasted },
                                   true
                                 );
-                                void handleFetchTikTokPostMetadata(post, pasted);
+                                void handleFetchTikTokPostMetadata(post, pasted, true);
                               }
                             }}
                             placeholder="https://vt.tiktok.com/... or https://www.tiktok.com/@.../video/..."
@@ -1356,12 +1360,21 @@ export function AdminDashboard({
 
                     <div className="flex items-start gap-3.5">
                       <div className="w-20 sm:w-24 aspect-[9/14] shrink-0 rounded-lg overflow-hidden bg-zinc-950 border border-zinc-800">
-                        <img
-                          src={post.coverImageUrl}
-                          alt={post.title}
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover"
-                        />
+                        {post.coverImageUrl ? (
+                          <img
+                            src={post.coverImageUrl}
+                            alt={post.title}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 p-2 text-center gap-1">
+                            <Film className="w-5 h-5" aria-hidden="true" />
+                            <span className="text-[10px] leading-tight">
+                              Auto cover from TikTok link
+                            </span>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex-1 min-w-0 flex flex-wrap items-center gap-2">
@@ -1521,8 +1534,7 @@ export function AdminDashboard({
                               lastFetchedUrls[post.id] !== normalized &&
                               (!post.title.trim() ||
                                 post.title === DEFAULT_TIKTOK_TITLE ||
-                                post.coverImageUrl.includes('/assets/aistudio/') ||
-                                post.coverImageUrl.startsWith('/src/assets/images/'))
+                                isPlaceholderTikTokCover(post.coverImageUrl))
                             ) {
                               void handleFetchTikTokPostMetadata(post, normalized);
                             }

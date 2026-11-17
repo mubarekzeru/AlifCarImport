@@ -15,7 +15,11 @@ import {
   submitInquiryToFirestore,
   syncShowroomStoreToFirestore,
 } from './firestoreStore';
-import { isAuthorizedAdminEmail } from './inventory';
+import {
+  deriveTitleFromVideoDescription,
+  isAuthorizedAdminEmail,
+  normalizeTikTokUrl,
+} from './inventory';
 
 const LOCAL_STORAGE_KEY = 'alif_car_import_store_v1';
 
@@ -100,9 +104,7 @@ export async function signInAdminWithEmailPassword(
 
   if (!isAuthorizedAdminEmail(signedEmail, combinedAllowlist)) {
     await signOut(auth).catch(() => undefined);
-    throw new Error(
-      `Account "${signedEmail}" is not authorized. Please sign in with alifcarimports@gmail.com.`
-    );
+    throw new Error('This email is not authorized for admin access.');
   }
 
   return { authenticated: true, email: signedEmail };
@@ -148,9 +150,7 @@ export async function signInAdminWithGoogle(
 
   if (!isAuthorizedAdminEmail(email, combinedAllowlist)) {
     await signOut(auth).catch(() => undefined);
-    throw new Error(
-      `Account "${email}" is not authorized. Please sign in with alifcarimports@gmail.com.`
-    );
+    throw new Error('This email is not authorized for admin access.');
   }
 
   return { authenticated: true, email };
@@ -214,7 +214,7 @@ export async function saveShowroomStore(
   cacheShowroomStoreLocally(store);
 
   if (!auth.currentUser) {
-    throw new Error('Please sign in with Google (alifcarimports@gmail.com) to publish changes.');
+    throw new Error('Please sign in with an authorized admin account to publish changes.');
   }
 
   try {
@@ -226,7 +226,7 @@ export async function saveShowroomStore(
 
 export async function resetShowroomStore(): Promise<ShowroomStore> {
   if (!auth.currentUser) {
-    throw new Error('Please sign in with Google (alifcarimports@gmail.com) to reset defaults.');
+    throw new Error('Please sign in with an authorized admin account to reset defaults.');
   }
 
   try {
@@ -276,26 +276,150 @@ export interface TikTokMetadataResult {
   authorHandle: string;
 }
 
-export async function fetchTikTokVideoMetadata(url: string): Promise<TikTokMetadataResult> {
-  const response = await fetch('/api/tiktok-metadata', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url }),
-  });
-  const json = (await response.json().catch(() => ({}))) as Partial<TikTokMetadataResult> & {
-    error?: string;
-  };
-  if (!response.ok) {
-    throw new Error(json.error || 'Unable to fetch video details from TikTok.');
+async function tryConvertRemoteCoverToDataUrl(imageUrl: string): Promise<string> {
+  if (!imageUrl || imageUrl.startsWith('data:')) return imageUrl;
+  try {
+    const res = await fetch(imageUrl, { mode: 'cors' });
+    if (!res.ok) return imageUrl;
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/') || blob.size === 0 || blob.size > 380 * 1024) {
+      return imageUrl;
+    }
+    return await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onerror = () => resolve(imageUrl);
+      reader.onload = () =>
+        resolve(typeof reader.result === 'string' ? reader.result : imageUrl);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return imageUrl;
   }
-  return {
-    resolvedUrl: json.resolvedUrl || url,
-    videoId: json.videoId || null,
-    description: json.description || '',
-    suggestedTitle: json.suggestedTitle || '',
-    coverImageUrl: json.coverImageUrl || '',
-    coverOptions: Array.isArray(json.coverOptions) ? json.coverOptions : [],
-    authorHandle: json.authorHandle || '',
-  };
+}
+
+export async function fetchTikTokVideoMetadata(url: string): Promise<TikTokMetadataResult> {
+  const normalizedUrl = normalizeTikTokUrl(url);
+
+  // 1. Try local Express metadata endpoint first when running on AI Studio / Node server
+  try {
+    const response = await fetch('/api/tiktok-metadata', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: normalizedUrl }),
+    });
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const json = (await response.json().catch(() => ({}))) as Partial<TikTokMetadataResult> & {
+        error?: string;
+      };
+      if (response.ok) {
+        return {
+          resolvedUrl: json.resolvedUrl || normalizedUrl,
+          videoId: json.videoId || null,
+          description: json.description || '',
+          suggestedTitle: json.suggestedTitle || '',
+          coverImageUrl: json.coverImageUrl || '',
+          coverOptions: Array.isArray(json.coverOptions) ? json.coverOptions : [],
+          authorHandle: json.authorHandle || '',
+        };
+      }
+      if (response.status >= 400 && response.status < 500 && response.status !== 404 && response.status !== 405) {
+        throw new Error(json.error || 'Unable to fetch video details from TikTok.');
+      }
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('valid TikTok URL')) {
+      throw err;
+    }
+    // Static hosting (GitHub Pages) does not run Express /api/tiktok-metadata — fall through
+  }
+
+  // 2. Client-side CORS fallback for static deployments (GitHub Pages)
+  try {
+    const apiRes = await fetch(
+      `https://www.tikwm.com/api/?url=${encodeURIComponent(normalizedUrl)}`
+    );
+    if (apiRes.ok) {
+      const payload = (await apiRes.json()) as {
+        code?: number;
+        data?: {
+          id?: string;
+          title?: string;
+          cover?: string;
+          origin_cover?: string;
+          author?: { unique_id?: string };
+        };
+      };
+      const item = payload?.data;
+      if (payload?.code === 0 && item) {
+        const videoId = item.id || null;
+        const authorHandle = item.author?.unique_id ? `@${item.author.unique_id}` : '';
+        const resolvedUrl =
+          videoId && item.author?.unique_id
+            ? `https://www.tiktok.com/@${item.author.unique_id}/video/${videoId}`
+            : normalizedUrl;
+        const description = (item.title || '').trim();
+        const suggestedTitle = deriveTitleFromVideoDescription(description);
+        const rawCandidates: { label: string; url: string }[] = [];
+        if (typeof item.cover === 'string' && item.cover.startsWith('http')) {
+          rawCandidates.push({ label: 'Video Cover', url: item.cover });
+        }
+        if (
+          typeof item.origin_cover === 'string' &&
+          item.origin_cover.startsWith('http') &&
+          item.origin_cover !== item.cover
+        ) {
+          rawCandidates.push({ label: 'Clean Video Frame', url: item.origin_cover });
+        }
+        const coverOptions = await Promise.all(
+          rawCandidates.map(async (c) => ({
+            label: c.label,
+            url: await tryConvertRemoteCoverToDataUrl(c.url),
+          }))
+        );
+        return {
+          resolvedUrl,
+          videoId,
+          description,
+          suggestedTitle,
+          coverImageUrl: coverOptions[0]?.url || '',
+          coverOptions,
+          authorHandle,
+        };
+      }
+    }
+  } catch {
+    // Fall through to TikTok oEmbed
+  }
+
+  // 3. Official TikTok oEmbed fallback
+  const oeRes = await fetch(
+    `https://www.tiktok.com/oembed?url=${encodeURIComponent(normalizedUrl)}`
+  ).catch(() => null);
+  if (oeRes && oeRes.ok) {
+    const oe = (await oeRes.json().catch(() => ({}))) as {
+      title?: string;
+      thumbnail_url?: string;
+      author_name?: string;
+      embed_product_id?: string;
+    };
+    const description = (oe.title || '').trim();
+    const suggestedTitle = deriveTitleFromVideoDescription(description);
+    const rawThumb =
+      typeof oe.thumbnail_url === 'string' && oe.thumbnail_url.startsWith('http')
+        ? await tryConvertRemoteCoverToDataUrl(oe.thumbnail_url)
+        : '';
+    return {
+      resolvedUrl: normalizedUrl,
+      videoId: oe.embed_product_id || null,
+      description,
+      suggestedTitle,
+      coverImageUrl: rawThumb,
+      coverOptions: rawThumb ? [{ label: 'Video Cover', url: rawThumb }] : [],
+      authorHandle: oe.author_name ? `@${oe.author_name.replace(/^@/, '')}` : '',
+    };
+  }
+
+  throw new Error('Unable to fetch video cover & title from TikTok. Try uploading a cover or using From Video File.');
 }

@@ -190,6 +190,10 @@ async function downloadCoverToCache(
     if (arrayBuffer.byteLength === 0 || arrayBuffer.byteLength > 5 * 1024 * 1024) {
       return null;
     }
+    const mime = contentType.split(';')[0] || 'image/jpeg';
+    if (arrayBuffer.byteLength <= 380 * 1024) {
+      return `data:${mime};base64,${Buffer.from(arrayBuffer).toString('base64')}`;
+    }
     const ext = contentType.includes('png')
       ? 'png'
       : contentType.includes('webp')

@@ -187,6 +187,12 @@ function AdminLoginView({
                 src={logoUrl}
                 alt={companyName}
                 referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const fallback = `${import.meta.env.BASE_URL}assets/aistudio/file_00000000f2b48211a1d7ce760b266f14_d8a15dfc.png`;
+                  if (!e.currentTarget.src.endsWith(fallback)) {
+                    e.currentTarget.src = fallback;
+                  }
+                }}
                 className="w-8 h-8 rounded-full object-cover bg-white shrink-0"
               />
             ) : (
@@ -208,8 +214,7 @@ function AdminLoginView({
 
         <form onSubmit={handlePasswordSubmit} className="p-6 space-y-4">
           <p className="text-sm text-zinc-400 leading-relaxed">
-            Sign in with your authorized {companyName} administrator account (
-            <span className="text-zinc-200 font-medium">alifcarimports@gmail.com</span>) to publish
+            Sign in with your authorized {companyName} administrator email and password to publish
             live updates to all visitors.
           </p>
 
@@ -230,7 +235,7 @@ function AdminLoginView({
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="alifcarimports@gmail.com"
+                placeholder="Insert email"
                 className="w-full h-11 pl-9 pr-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#D92027]"
               />
             </div>
