@@ -24,7 +24,7 @@ import type {
   TikTokSectionConfig,
   Vehicle,
 } from '../types/showroom';
-import { DEFAULT_ADMIN_EMAILS } from './inventory';
+import { DEFAULT_ADMIN_EMAILS, resolvePublicAssetUrl } from './inventory';
 
 const MAX_VEHICLE_DOC_BYTES = 920_000;
 
@@ -52,6 +52,9 @@ function buildHeroPayload(hero: HeroPost) {
     title: clampStr(hero.title, 200, 'Alif Car Import') || 'Alif Car Import',
     description: clampStr(hero.description, 1200, ''),
     imageUrl: clampStr(hero.imageUrl, 550_000, ''),
+    ...(typeof hero.videoUrl === 'string' && hero.videoUrl.trim()
+      ? { videoUrl: clampStr(hero.videoUrl, 550_000, '') }
+      : {}),
     ctaLabel: clampStr(hero.ctaLabel, 80, 'Browse Inventory') || 'Browse Inventory',
   };
 }
@@ -388,11 +391,27 @@ export function subscribeShowroomFromFirestore(
     }
 
     const base = fallbackStore;
+    const resolvedBranding = configData?.branding
+      ? {
+          ...base.branding,
+          ...configData.branding,
+          logoUrl:
+            resolvePublicAssetUrl(configData.branding.logoUrl) || base.branding.logoUrl,
+        }
+      : base.branding;
+    const resolvedHero = configData?.hero
+      ? {
+          ...base.hero,
+          ...configData.hero,
+          imageUrl: resolvePublicAssetUrl(configData.hero.imageUrl),
+          videoUrl:
+            resolvePublicAssetUrl(configData.hero.videoUrl) || base.hero.videoUrl,
+        }
+      : base.hero;
+
     const merged: ShowroomStore = {
-      branding: configData?.branding
-        ? { ...base.branding, ...configData.branding }
-        : base.branding,
-      hero: configData?.hero ? { ...base.hero, ...configData.hero } : base.hero,
+      branding: resolvedBranding,
+      hero: resolvedHero,
       vehicles: hasConfig || vehiclesLoaded ? remoteVehicles : base.vehicles,
       tiktok: {
         title: configData?.tiktok?.title ?? base.tiktok.title,

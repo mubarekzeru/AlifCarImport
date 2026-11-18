@@ -18,23 +18,7 @@ const BASE_URL =
     : '/';
 
 export const ALIF_DEFAULT_LOGO = `${BASE_URL}assets/aistudio/file_00000000f2b48211a1d7ce760b266f14_d8a15dfc.png`;
-export const ALIF_DEFAULT_HERO_SIGN = `${BASE_URL}assets/aistudio/1794743573450_afe14f04.jpg`;
-
-export const PRESET_VEHICLE_PHOTOS = [
-  { label: 'Alif Showroom Sign (Night)', url: ALIF_DEFAULT_HERO_SIGN },
-  { label: 'Toyota Land Cruiser 300', url: landCruiserImg },
-  { label: 'Lexus RX 350', url: lexusRxImg },
-  { label: 'Mercedes-Benz GLE 450', url: mercedesGleImg },
-  { label: 'Hyundai Tucson Hybrid', url: hyundaiTucsonImg },
-  { label: 'Porsche Cayenne S', url: porscheCayenneImg },
-  { label: 'Kia Sportage X-Pro', url: kiaSportageImg },
-  { label: 'BYD Song Plus EV', url: bydSongPlusImg },
-  { label: 'Toyota RAV4 Hybrid', url: toyotaRav4Img },
-  { label: 'BMW X5 M Sport', url: bmwX5Img },
-  { label: 'Range Rover Sport', url: rangeRoverSportImg },
-  { label: 'Volkswagen ID.4 Pro', url: vwId4Img },
-  { label: 'Toyota Hilux GR Sport', url: toyotaHiluxImg },
-];
+export const ALIF_DEFAULT_HERO_VIDEO = `${BASE_URL}assets/aistudio/gemini_generated_video_9a151ab3_e5ba47be.mp4`;
 
 export const INITIAL_SHOWROOM_STORE: ShowroomStore = {
   branding: {
@@ -47,7 +31,8 @@ export const INITIAL_SHOWROOM_STORE: ShowroomStore = {
     title: 'Curated global vehicles, inspected and ready for the road.',
     description:
       'Alif Car Import sources verified, low-mileage SUVs and executive crossovers directly from international markets with transparent documentation and full customs clearance.',
-    imageUrl: ALIF_DEFAULT_HERO_SIGN,
+    imageUrl: '',
+    videoUrl: ALIF_DEFAULT_HERO_VIDEO,
     ctaLabel: 'Browse Vehicles',
   },
   vehicles: [

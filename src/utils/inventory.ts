@@ -789,3 +789,31 @@ export function splitDisplayBrandLines(companyName: string): string[] {
   const splitIndex = Math.ceil(words.length / 2);
   return [words.slice(0, splitIndex).join(' '), words.slice(splitIndex).join(' ')];
 }
+
+export function resolvePublicAssetUrl(rawUrl?: string, baseUrlOverride?: string): string {
+  const trimmed = (rawUrl ?? '').trim();
+  if (!trimmed) return '';
+  if (
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://')
+  ) {
+    return trimmed;
+  }
+
+  const baseUrl =
+    baseUrlOverride ??
+    (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
+      ? import.meta.env.BASE_URL
+      : '/');
+  const cleanBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+
+  const assetsIdx = trimmed.indexOf('/assets/');
+  if (assetsIdx !== -1 && !trimmed.startsWith('/src/')) {
+    const relativeAssetPath = trimmed.slice(assetsIdx + 1);
+    return `${cleanBase}${relativeAssetPath}`;
+  }
+
+  return trimmed;
+}

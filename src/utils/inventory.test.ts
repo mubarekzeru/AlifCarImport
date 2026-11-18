@@ -21,6 +21,7 @@ import {
   getVehiclePricingBreakdown,
   getAvailableColorSwatches,
   splitDisplayBrandLines,
+  resolvePublicAssetUrl,
   isAuthorizedAdminEmail,
 } from './inventory';
 import type { Vehicle } from '../types/showroom';
@@ -478,4 +479,20 @@ test('splitDisplayBrandLines splits multi-word company names into balanced hero 
   assert.deepEqual(splitDisplayBrandLines('Alif Motors'), ['Alif', 'Motors']);
   assert.deepEqual(splitDisplayBrandLines('Alif'), ['Alif']);
   assert.deepEqual(splitDisplayBrandLines('   '), ['Alif Car', 'Import']);
+});
+
+test('resolvePublicAssetUrl rebases stored /assets and /AlifCarImport/assets paths cleanly', () => {
+  assert.equal(
+    resolvePublicAssetUrl(
+      '/AlifCarImport/assets/aistudio/file_00000000f2b48211a1d7ce760b266f14_d8a15dfc.png',
+      '/'
+    ),
+    '/assets/aistudio/file_00000000f2b48211a1d7ce760b266f14_d8a15dfc.png'
+  );
+  assert.equal(
+    resolvePublicAssetUrl('/assets/aistudio/gemini_generated_video_9a151ab3_e5ba47be.mp4', '/AlifCarImport/'),
+    '/AlifCarImport/assets/aistudio/gemini_generated_video_9a151ab3_e5ba47be.mp4'
+  );
+  assert.equal(resolvePublicAssetUrl('data:image/png;base64,abc', '/'), 'data:image/png;base64,abc');
+  assert.equal(resolvePublicAssetUrl('https://cdn.example.com/logo.png', '/AlifCarImport/'), 'https://cdn.example.com/logo.png');
 });

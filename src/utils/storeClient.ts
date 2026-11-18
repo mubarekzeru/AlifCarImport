@@ -19,7 +19,23 @@ import {
   deriveTitleFromVideoDescription,
   isAuthorizedAdminEmail,
   normalizeTikTokUrl,
+  resolvePublicAssetUrl,
 } from './inventory';
+
+function normalizeStoreAssetPaths(store: ShowroomStore): ShowroomStore {
+  return {
+    ...store,
+    branding: {
+      ...store.branding,
+      logoUrl: resolvePublicAssetUrl(store.branding?.logoUrl) || INITIAL_SHOWROOM_STORE.branding.logoUrl,
+    },
+    hero: {
+      ...store.hero,
+      imageUrl: resolvePublicAssetUrl(store.hero?.imageUrl),
+      videoUrl: resolvePublicAssetUrl(store.hero?.videoUrl) || INITIAL_SHOWROOM_STORE.hero.videoUrl,
+    },
+  };
+}
 
 const LOCAL_STORAGE_KEY = 'alif_car_import_store_v1';
 
@@ -37,7 +53,7 @@ export function readCachedShowroomStore(): ShowroomStore | null {
     if (!cached) return null;
     const parsed = JSON.parse(cached) as ShowroomStore;
     if (parsed && Array.isArray(parsed.vehicles)) {
-      return parsed;
+      return normalizeStoreAssetPaths(parsed);
     }
     return null;
   } catch {
@@ -196,8 +212,9 @@ export async function loadShowroomStore(): Promise<ShowroomStore> {
     if (response.ok) {
       const json = (await response.json()) as { initialized?: boolean; data?: ShowroomStore | null };
       if (json.initialized && json.data && Array.isArray(json.data.vehicles)) {
-        cacheShowroomStoreLocally(json.data);
-        return json.data;
+        const normalized = normalizeStoreAssetPaths(json.data);
+        cacheShowroomStoreLocally(normalized);
+        return normalized;
       }
     }
   } catch {

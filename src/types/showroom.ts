@@ -27,6 +27,7 @@ export interface HeroPost {
   title: string;
   description: string;
   imageUrl: string;
+  videoUrl?: string;
   ctaLabel: string;
 }
 

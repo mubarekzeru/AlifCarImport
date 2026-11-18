@@ -1,6 +1,5 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Car, Loader2, RefreshCw, Upload, X } from 'lucide-react';
-import { PRESET_VEHICLE_PHOTOS } from '../data/seedData';
 import type { Vehicle, VehicleStatus } from '../types/showroom';
 import { readFileAsResizedDataUrl } from '../utils/imageUpload';
 import {
@@ -38,7 +37,7 @@ export function VehicleFormModal({
   const [fuelType, setFuelType] = useState('Petrol');
   const [color, setColor] = useState('');
   const [origin, setOrigin] = useState('Japan Import');
-  const [imageUrl, setImageUrl] = useState(PRESET_VEHICLE_PHOTOS[0].url);
+  const [imageUrl, setImageUrl] = useState('');
   const [galleryImages, setGalleryImages] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [tiktokUrl, setTiktokUrl] = useState('');
@@ -98,7 +97,7 @@ export function VehicleFormModal({
       setFuelType('Petrol');
       setColor('');
       setOrigin('Direct Import');
-      setImageUrl(PRESET_VEHICLE_PHOTOS[0].url);
+      setImageUrl('');
       setGalleryImages([]);
       setDescription('');
       setTiktokUrl('');
@@ -169,7 +168,7 @@ export function VehicleFormModal({
       }
       if (meta.coverOptions.length > 0) {
         setTiktokCovers(meta.coverOptions);
-        if (!initialVehicle && imageUrl === PRESET_VEHICLE_PHOTOS[0].url) {
+        if (!initialVehicle && !imageUrl.trim()) {
           setImageUrl(meta.coverOptions[0].url);
         }
       }
@@ -199,6 +198,11 @@ export function VehicleFormModal({
 
     if (Object.keys(validation).length > 0) {
       setErrors(validation);
+      return;
+    }
+
+    if (!imageUrl.trim()) {
+      setUploadError('Please upload a vehicle photo or fetch a cover from a TikTok video link.');
       return;
     }
 
@@ -263,17 +267,30 @@ export function VehicleFormModal({
           {/* Photo upload + preview */}
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-5 items-start">
             <div className="sm:col-span-5">
-              <div className="aspect-[4/3] w-full rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900">
+              <div className="relative aspect-[4/3] w-full rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900">
                 {imageUrl ? (
-                  <img
-                    src={imageUrl}
-                    alt="Vehicle preview"
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover"
-                  />
+                  <>
+                    <img
+                      src={imageUrl}
+                      alt="Vehicle preview"
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setImageUrl('')}
+                      aria-label="Remove vehicle cover photo"
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/75 border border-white/20 text-white inline-flex items-center justify-center hover:bg-[#D92027] cursor-pointer transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </>
                 ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center text-zinc-600">
-                    <Car className="w-8 h-8" />
+                  <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 p-4 text-center gap-1.5">
+                    <Car className="w-8 h-8" aria-hidden="true" />
+                    <span className="text-[11px] leading-snug">
+                      Upload a photo or fetch cover from TikTok
+                    </span>
                   </div>
                 )}
               </div>

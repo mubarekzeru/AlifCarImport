@@ -7,8 +7,13 @@ import {
   Phone,
   Share2,
 } from 'lucide-react';
+import { ALIF_DEFAULT_LOGO } from '../data/seedData';
 import type { LocationContact, TikTokSectionConfig } from '../types/showroom';
-import { buildWhatsAppHref, getConfiguredSocialLinks } from '../utils/inventory';
+import {
+  buildWhatsAppHref,
+  getConfiguredSocialLinks,
+  resolvePublicAssetUrl,
+} from '../utils/inventory';
 import { ScrollReveal } from './ScrollReveal';
 import { SocialMediaIconRow } from './SocialIcons';
 
@@ -41,11 +46,16 @@ export function LocationContactSection({
           {/* Left: Showroom Summary & Direct Order / Visit Actions */}
           <ScrollReveal y={28} className="lg:col-span-5 space-y-5">
             <div className="flex items-center gap-3.5">
-              {logoUrl && (
+              {(logoUrl || ALIF_DEFAULT_LOGO) && (
                 <img
-                  src={logoUrl}
+                  src={resolvePublicAssetUrl(logoUrl) || ALIF_DEFAULT_LOGO}
                   alt={companyName}
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
+                      e.currentTarget.src = ALIF_DEFAULT_LOGO;
+                    }
+                  }}
                   className="w-12 h-12 rounded-full object-cover bg-white shrink-0 shadow-sm"
                 />
               )}

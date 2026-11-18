@@ -21,7 +21,6 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { PRESET_VEHICLE_PHOTOS } from '../data/seedData';
 import type {
   ShowroomStore,
   TikTokPost,
@@ -270,10 +269,7 @@ export function AdminDashboard({
   const isPlaceholderTikTokCover = (url?: string): boolean => {
     const trimmed = (url ?? '').trim();
     if (!trimmed) return true;
-    if (trimmed.startsWith('/src/assets/images/') || trimmed.includes('/assets/aistudio/')) {
-      return true;
-    }
-    return PRESET_VEHICLE_PHOTOS.some((preset) => preset.url === trimmed);
+    return trimmed.startsWith('/src/assets/images/') || trimmed.includes('/assets/aistudio/');
   };
 
   const handleAddTikTokPost = () => {
@@ -1406,28 +1402,6 @@ export function AdminDashboard({
                             className="sr-only"
                           />
                         </label>
-
-                        <select
-                          aria-label={`Pick preset cover for TikTok post ${idx + 1}`}
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              void handleUpdateTikTokPost(
-                                post.id,
-                                { coverImageUrl: e.target.value },
-                                true
-                              );
-                            }
-                          }}
-                          className="h-7 px-2 bg-[#1c1c21] border border-zinc-700 rounded-lg text-[11px] text-zinc-200 cursor-pointer"
-                        >
-                          <option value="">Preset cover...</option>
-                          {PRESET_VEHICLE_PHOTOS.map((preset) => (
-                            <option key={preset.label} value={preset.url}>
-                              {preset.label}
-                            </option>
-                          ))}
-                        </select>
 
                         {post.tiktokUrl && (
                           <a

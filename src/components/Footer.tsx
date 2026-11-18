@@ -1,6 +1,7 @@
 import { MapPin, Phone } from 'lucide-react';
+import { ALIF_DEFAULT_LOGO } from '../data/seedData';
 import type { BrandingSettings, LocationContact, TikTokSectionConfig } from '../types/showroom';
-import { getConfiguredSocialLinks } from '../utils/inventory';
+import { getConfiguredSocialLinks, resolvePublicAssetUrl } from '../utils/inventory';
 import { ScrollReveal } from './ScrollReveal';
 import { SocialMediaIconRow } from './SocialIcons';
 
@@ -19,11 +20,16 @@ export function Footer({ branding, contact, tiktok }: FooterProps) {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
           <ScrollReveal y={24} className="space-y-3">
             <div className="flex items-center gap-3">
-              {branding.logoUrl && (
+              {(branding.logoUrl || ALIF_DEFAULT_LOGO) && (
                 <img
-                  src={branding.logoUrl}
+                  src={resolvePublicAssetUrl(branding.logoUrl) || ALIF_DEFAULT_LOGO}
                   alt={branding.companyName}
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
+                      e.currentTarget.src = ALIF_DEFAULT_LOGO;
+                    }
+                  }}
                   className="w-11 h-11 rounded-full object-cover bg-white shrink-0 shadow-sm"
                 />
               )}

@@ -13,7 +13,7 @@ import { SearchFilterBar } from './components/SearchFilterBar';
 import { TikTokShowcase } from './components/TikTokShowcase';
 import { VehicleCard } from './components/VehicleCard';
 import { VehicleDetailPage } from './components/VehicleDetailPage';
-import { INITIAL_SHOWROOM_STORE } from './data/seedData';
+import { ALIF_DEFAULT_LOGO, INITIAL_SHOWROOM_STORE } from './data/seedData';
 import { auth, formatFirestoreUserMessage } from './firebase';
 import type { ShowroomStore, Vehicle, VehicleFilters, VehicleStatus } from './types/showroom';
 import {
@@ -25,6 +25,7 @@ import {
   getAvailableColorSwatches,
   getFilterOptions,
   isAuthorizedAdminEmail,
+  resolvePublicAssetUrl,
 } from './utils/inventory';
 import {
   cacheShowroomStoreLocally,
@@ -182,15 +183,14 @@ function AdminLoginView({
       <div className="w-full max-w-md bg-[#141418] border border-zinc-800 rounded-xl shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
           <div className="flex items-center gap-2.5">
-            {logoUrl ? (
+            {logoUrl || ALIF_DEFAULT_LOGO ? (
               <img
-                src={logoUrl}
+                src={resolvePublicAssetUrl(logoUrl) || ALIF_DEFAULT_LOGO}
                 alt={companyName}
                 referrerPolicy="no-referrer"
                 onError={(e) => {
-                  const fallback = `${import.meta.env.BASE_URL}assets/aistudio/file_00000000f2b48211a1d7ce760b266f14_d8a15dfc.png`;
-                  if (!e.currentTarget.src.endsWith(fallback)) {
-                    e.currentTarget.src = fallback;
+                  if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
+                    e.currentTarget.src = ALIF_DEFAULT_LOGO;
                   }
                 }}
                 className="w-8 h-8 rounded-full object-cover bg-white shrink-0"

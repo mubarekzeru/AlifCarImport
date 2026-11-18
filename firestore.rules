@@ -61,11 +61,12 @@ service cloud.firestore {
     function isValidHero(h) {
       return h is map &&
         h.keys().hasAll(['kicker', 'title', 'description', 'imageUrl', 'ctaLabel']) &&
-        h.keys().hasOnly(['kicker', 'title', 'description', 'imageUrl', 'ctaLabel']) &&
+        h.keys().hasOnly(['kicker', 'title', 'description', 'imageUrl', 'videoUrl', 'ctaLabel']) &&
         isValidString(h.kicker, 0, 120) &&
         isValidString(h.title, 1, 200) &&
         isValidString(h.description, 0, 1200) &&
         isValidString(h.imageUrl, 0, 550000) &&
+        (!('videoUrl' in h) || isValidString(h.videoUrl, 0, 550000)) &&
         isValidString(h.ctaLabel, 1, 80);
     }
 

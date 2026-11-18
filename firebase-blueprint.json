@@ -11,7 +11,7 @@
         },
         "hero": {
           "type": "object",
-          "description": "Hero banner kicker, title, description, imageUrl, and CTA label."
+          "description": "Hero banner kicker, title, description, imageUrl, optional videoUrl, and CTA label."
         },
         "tiktok": {
           "type": "object",
