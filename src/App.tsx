@@ -6,6 +6,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 're
 import { AdminDashboard } from './components/AdminDashboard';
 import { Footer } from './components/Footer';
 import { HeroSection } from './components/HeroSection';
+import { HowItWorksSection } from './components/HowItWorksSection';
 import { LocationContactSection } from './components/LocationContactSection';
 import { Navbar } from './components/Navbar';
 import { ScrollReveal } from './components/ScrollReveal';
@@ -13,7 +14,11 @@ import { SearchFilterBar } from './components/SearchFilterBar';
 import { TikTokShowcase } from './components/TikTokShowcase';
 import { VehicleCard } from './components/VehicleCard';
 import { VehicleDetailPage } from './components/VehicleDetailPage';
-import { ALIF_DEFAULT_LOGO, INITIAL_SHOWROOM_STORE } from './data/seedData';
+import {
+  ALIF_DEFAULT_HERO_POSTER,
+  ALIF_DEFAULT_LOGO,
+  INITIAL_SHOWROOM_STORE,
+} from './data/seedData';
 import { auth, formatFirestoreUserMessage } from './firebase';
 import type { ShowroomStore, Vehicle, VehicleFilters, VehicleStatus } from './types/showroom';
 import {
@@ -179,134 +184,205 @@ function AdminLoginView({
   };
 
   return (
-    <main className="min-h-screen bg-[#0a0a0c] flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-[#141418] border border-zinc-800 rounded-xl shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-          <div className="flex items-center gap-2.5">
-            {logoUrl || ALIF_DEFAULT_LOGO ? (
-              <img
-                src={resolvePublicAssetUrl(logoUrl) || ALIF_DEFAULT_LOGO}
-                alt={companyName}
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
-                    e.currentTarget.src = ALIF_DEFAULT_LOGO;
-                  }
-                }}
-                className="w-8 h-8 rounded-full object-cover bg-white shrink-0"
-              />
-            ) : (
-              <Lock className="w-4 h-4 text-[#D92027]" aria-hidden="true" />
-            )}
-            <h1 className="font-display text-lg font-semibold text-white">
-              Admin Sign In
-            </h1>
-          </div>
-          <button
-            type="button"
-            onClick={onBackToShowroom}
-            className="inline-flex items-center gap-1 text-xs font-medium text-zinc-400 hover:text-white cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Showroom</span>
-          </button>
-        </div>
+    <main className="min-h-screen bg-[#08080a] bg-[radial-gradient(ellipse_at_top,rgba(225,29,42,0.08),transparent_60%)] flex items-center justify-center p-4 sm:p-6">
+      <div className="w-full max-w-4xl lg:grid lg:grid-cols-12 rounded-2xl overflow-hidden bg-[#111115] border border-white/[0.08] shadow-[0_32px_90px_rgba(0,0,0,0.75)]">
+        {/* Left editorial showroom panel on desktop */}
+        <aside className="hidden lg:flex lg:col-span-5 relative flex-col justify-between p-8 bg-[#0b0b0e] border-r border-white/[0.07] overflow-hidden">
+          <img
+            src={resolvePublicAssetUrl(ALIF_DEFAULT_HERO_POSTER)}
+            alt={companyName}
+            referrerPolicy="no-referrer"
+            className="absolute inset-0 w-full h-full object-cover opacity-35 select-none pointer-events-none"
+          />
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-gradient-to-t from-[#08080a] via-[#08080a]/75 to-[#08080a]/55 pointer-events-none"
+          />
 
-        <form onSubmit={handlePasswordSubmit} className="p-6 space-y-4">
-          <p className="text-sm text-zinc-400 leading-relaxed">
-            Sign in with your authorized {companyName} administrator email and password to publish
-            live updates to all visitors.
-          </p>
-
-          <div>
-            <label htmlFor="admin-login-email" className="block text-xs font-medium text-zinc-300 mb-1.5">
-              Admin Email *
-            </label>
-            <div className="relative">
-              <Mail
-                className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                aria-hidden="true"
-              />
-              <input
-                id="admin-login-email"
-                type="email"
-                required
-                autoFocus
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Insert email"
-                className="w-full h-11 pl-9 pr-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#D92027]"
-              />
+          <div className="relative z-10 flex items-center gap-3">
+            <img
+              src={resolvePublicAssetUrl(logoUrl) || ALIF_DEFAULT_LOGO}
+              alt={companyName}
+              referrerPolicy="no-referrer"
+              onError={(e) => {
+                if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
+                  e.currentTarget.src = ALIF_DEFAULT_LOGO;
+                }
+              }}
+              className="w-10 h-10 rounded-full object-cover bg-white ring-2 ring-white/20 shrink-0"
+            />
+            <div className="min-w-0">
+              <p className="font-display text-sm font-semibold text-white truncate">
+                {companyName}
+              </p>
+              <p className="text-xs text-zinc-400">Showroom Console</p>
             </div>
           </div>
 
-          <div>
-            <label htmlFor="admin-login-password" className="block text-xs font-medium text-zinc-300 mb-1.5">
-              Password *
-            </label>
-            <div className="relative">
-              <Lock
-                className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                aria-hidden="true"
-              />
-              <input
-                id="admin-login-password"
-                type={showPassword ? 'text' : 'password'}
-                required
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter admin password"
-                className="w-full h-11 pl-9 pr-10 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#D92027]"
-              />
+          <div className="relative z-10 space-y-4">
+            <h2 className="font-display text-2xl font-bold tracking-tight text-white leading-snug text-balance">
+              Dealership Control Center
+            </h2>
+            <p className="text-sm text-zinc-300 leading-relaxed">
+              Manage your imported vehicle fleet, publish TikTok walkaround reels, and keep showroom
+              contact details synchronized across all visitors.
+            </p>
+            <div className="pt-3 border-t border-white/[0.08] flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
+              <span>Live Fleet Sync</span>
+              <span aria-hidden="true">·</span>
+              <span>TikTok Reels</span>
+              <span aria-hidden="true">·</span>
+              <span>Contact</span>
+            </div>
+          </div>
+        </aside>
+
+        {/* Right sign-in panel */}
+        <div className="lg:col-span-7 p-6 sm:p-10 space-y-6">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 lg:hidden">
+                <img
+                  src={resolvePublicAssetUrl(logoUrl) || ALIF_DEFAULT_LOGO}
+                  alt={companyName}
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
+                      e.currentTarget.src = ALIF_DEFAULT_LOGO;
+                    }
+                  }}
+                  className="w-9 h-9 rounded-full object-cover bg-white ring-2 ring-white/15 shrink-0"
+                />
+                <span className="text-xs font-medium text-zinc-400">{companyName}</span>
+              </div>
+
+              <h1 className="hidden lg:block font-display text-2xl font-bold tracking-tight text-white">
+                Alif <span className="text-[#E11D2A]">Car</span> Admin
+              </h1>
+
               <button
                 type="button"
-                onClick={() => setShowPassword((prev) => !prev)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-white cursor-pointer"
+                onClick={onBackToShowroom}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.08] hover:border-white/25 text-xs font-medium text-zinc-300 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                {showPassword ? (
-                  <EyeOff className="w-4 h-4" aria-hidden="true" />
-                ) : (
-                  <Eye className="w-4 h-4" aria-hidden="true" />
-                )}
+                <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Showroom</span>
               </button>
+            </div>
+
+            <div>
+              <h1 className="lg:hidden font-display text-2xl font-bold tracking-tight text-white">
+                Alif <span className="text-[#E11D2A]">Car</span> Admin
+              </h1>
+              <p className="text-xs sm:text-sm text-zinc-400 mt-1 lg:mt-0">
+                Sign in to manage your dealership inventory and showroom.
+              </p>
             </div>
           </div>
 
-          {error && (
-            <p
-              role="alert"
-              className="text-xs font-medium text-red-300 bg-red-950/50 border border-red-900/60 rounded-lg p-3 leading-relaxed"
+          <form onSubmit={handlePasswordSubmit} className="space-y-4">
+            <div>
+              <label
+                htmlFor="admin-login-email"
+                className="block text-xs font-medium text-zinc-300 mb-1.5"
+              >
+                Admin Email
+              </label>
+              <div className="relative">
+                <Mail
+                  className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  aria-hidden="true"
+                />
+                <input
+                  id="admin-login-email"
+                  type="email"
+                  required
+                  autoFocus
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="alifcarimports@gmail.com"
+                  className="w-full h-11 pl-10 pr-3.5 bg-[#09090c] border border-white/[0.1] rounded-xl text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A] transition-colors"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="admin-login-password"
+                className="block text-xs font-medium text-zinc-300 mb-1.5"
+              >
+                Password
+              </label>
+              <div className="relative">
+                <Lock
+                  className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  aria-hidden="true"
+                />
+                <input
+                  id="admin-login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter admin password"
+                  className="w-full h-11 pl-10 pr-11 bg-[#09090c] border border-white/[0.1] rounded-xl text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A] transition-colors"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 inline-flex items-center justify-center rounded-lg text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" aria-hidden="true" />
+                  ) : (
+                    <Eye className="w-4 h-4" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <p
+                role="alert"
+                className="text-xs font-medium text-red-300 bg-red-950/50 border border-red-900/60 rounded-xl p-3 leading-relaxed"
+              >
+                {error}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full h-11 bg-[#E11D2A] hover:bg-[#C81722] disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer"
             >
-              {error}
-            </p>
-          )}
+              {submitting ? 'Signing in...' : 'Sign In'}
+            </button>
 
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full h-11 bg-[#D92027] hover:bg-[#B91C1C] disabled:opacity-60 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
-          >
-            {submitting ? 'Signing in...' : 'Sign In'}
-          </button>
+            <div className="flex items-center gap-3 py-1">
+              <span className="h-px flex-1 bg-white/[0.08]" />
+              <span className="text-xs text-zinc-500">or continue with</span>
+              <span className="h-px flex-1 bg-white/[0.08]" />
+            </div>
 
-          <div className="flex items-center gap-3 py-1">
-            <span className="h-px flex-1 bg-zinc-800" />
-            <span className="text-[11px] uppercase tracking-wider text-zinc-500">or</span>
-            <span className="h-px flex-1 bg-zinc-800" />
-          </div>
-
-          <button
-            type="button"
-            onClick={() => void handleGoogleSignIn()}
-            disabled={submitting}
-            className="w-full h-10 bg-[#1c1c21] hover:bg-zinc-800 border border-zinc-700 disabled:opacity-60 text-zinc-100 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
-          >
-            Sign in with Google
-          </button>
-        </form>
+            <button
+              type="button"
+              onClick={() => void handleGoogleSignIn()}
+              disabled={submitting}
+              className="w-full h-11 inline-flex items-center justify-center gap-2.5 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.1] disabled:opacity-60 text-zinc-100 text-sm font-medium rounded-xl transition-colors cursor-pointer"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="#EA4335"
+                  d="M12 10.2v3.9h5.4c-.2 1.3-1.5 3.8-5.4 3.8-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.8 3.4 14.6 2.5 12 2.5 6.8 2.5 2.5 6.8 2.5 12s4.3 9.5 9.5 9.5c5.5 0 9.1-3.8 9.1-9.2 0-.6-.1-1.1-.2-1.6H12z"
+                />
+              </svg>
+              <span>Sign in with Google</span>
+            </button>
+          </form>
+        </div>
       </div>
     </main>
   );
@@ -673,10 +749,11 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="min-h-screen w-full flex flex-col bg-[#0a0a0c] text-zinc-100">
+      <div className="min-h-screen w-full flex flex-col bg-[#08080a] text-zinc-100">
         {!isAdminRoute && (
           <Navbar
             companyName={store.branding.companyName}
+            logoUrl={store.branding.logoUrl}
             contactPhone={store.contact.whatsapp || store.contact.phone}
             searchQuery={filters.query}
             orderedVehicles={orderedVehicles}
@@ -703,20 +780,20 @@ export default function App() {
               <Route
                 path="/"
                 element={
-                  <main className="flex-1 bg-[#0a0a0c]">
+                  <main className="flex-1 bg-[#08080a]">
                     <HeroSection
                       branding={store.branding}
                       hero={store.hero}
                       totalVehicles={store.vehicles.length}
                       availableCount={availableCount}
-                      onBrowseClick={() => navigateToSection('inventory')}
+                      onBrowseClick={() => navigateToSection('inventory-grid')}
                       onContactClick={() => navigateToSection('location-contact')}
                     />
 
-                    {/* Docked Shop-by-Vehicle Filter + Brand Matrix + Inventory */}
+                    {/* Curated Collection: Filter Bar + Brand Matrix + 3-Column Vehicle Grid */}
                     <section
                       id="inventory"
-                      className="scroll-mt-6 relative z-10 -mt-2 sm:-mt-5 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-14 space-y-10 sm:space-y-12"
+                      className="scroll-mt-20 relative z-10 pt-14 sm:pt-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-16 space-y-12 sm:space-y-14"
                     >
                       <SearchFilterBar
                         filters={filters}
@@ -739,7 +816,7 @@ export default function App() {
                       />
 
                       {/* Select Vehicle By Brand / Origin / Status Matrix + Color Swatches */}
-                      <div id="brand-showcase" className="scroll-mt-6 space-y-4">
+                      <div id="brand-showcase" className="scroll-mt-20 space-y-4">
                         <ScrollReveal
                           y={24}
                           className="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
@@ -759,7 +836,7 @@ export default function App() {
                           <div
                             role="tablist"
                             aria-label="Browse matrix mode"
-                            className="inline-flex items-center gap-1 bg-[#141418] border border-zinc-800 rounded-lg p-1 self-start sm:self-auto"
+                            className="inline-flex items-center gap-1 bg-[#111115] border border-white/[0.08] rounded-xl p-1 self-start sm:self-auto"
                           >
                             {(
                               [
@@ -774,9 +851,9 @@ export default function App() {
                                 role="tab"
                                 aria-selected={matrixMode === mode.id}
                                 onClick={() => setMatrixMode(mode.id)}
-                                className={`px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded-md transition-colors cursor-pointer ${
+                                className={`px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded-lg transition-colors cursor-pointer ${
                                   matrixMode === mode.id
-                                    ? 'bg-[#D92027] text-white'
+                                    ? 'bg-[#E11D2A] text-white'
                                     : 'text-zinc-400 hover:text-white'
                                 }`}
                               >
@@ -789,23 +866,23 @@ export default function App() {
                         <ScrollReveal
                           y={22}
                           delay={0.05}
-                          className="flex flex-wrap items-center gap-1.5 sm:gap-2"
+                          className="flex flex-wrap items-center gap-2"
                         >
                           {activeMatrixItems.map((item) => (
                             <button
                               key={item.key}
                               type="button"
                               onClick={item.onClick}
-                              className={`px-3 py-1.5 rounded-lg border inline-flex items-baseline gap-1.5 text-left transition-colors cursor-pointer ${
+                              className={`px-3.5 py-2 rounded-xl border inline-flex items-baseline gap-1.5 text-left transition-colors cursor-pointer ${
                                 item.active
-                                  ? 'bg-[#201113] border-[#D92027] text-white'
-                                  : 'bg-[#141418] border-zinc-800 hover:border-zinc-600 hover:bg-[#19191f] text-zinc-100'
+                                  ? 'bg-[#201113] border-[#E11D2A] text-white'
+                                  : 'bg-[#111115] border-white/[0.08] hover:border-white/25 hover:bg-[#17171d] text-zinc-100'
                               }`}
                             >
                               <span className="font-display text-xs sm:text-sm font-semibold tracking-tight text-white">
                                 {item.title}
                               </span>
-                              <span className="text-[11px] font-medium text-[#D92027] tabular-nums">
+                              <span className="text-[11px] font-medium text-[#E11D2A] tabular-nums">
                                 {item.subtitle}
                               </span>
                             </button>
@@ -816,7 +893,7 @@ export default function App() {
                           <ScrollReveal
                             y={20}
                             delay={0.09}
-                            className="flex items-center gap-2 overflow-x-auto pb-1"
+                            className="flex items-center gap-2 overflow-x-auto p-1"
                           >
                             {visibleColorSwatches.map((swatch) => {
                               const isActive = swatch.isReset
@@ -845,7 +922,7 @@ export default function App() {
                                     swatch.swatchClass
                                   } ${
                                     isActive
-                                      ? 'ring-2 ring-[#D92027] ring-offset-2 ring-offset-[#0a0a0c] scale-105'
+                                      ? 'ring-2 ring-[#E11D2A] ring-offset-2 ring-offset-[#08080a] scale-105'
                                       : 'opacity-85 hover:opacity-100'
                                   }`}
                                 >
@@ -862,22 +939,27 @@ export default function App() {
                       </div>
 
                       {/* Full Vehicle Showroom Grid */}
-                      <div id="inventory-grid" className="scroll-mt-6 space-y-6">
+                      <div id="inventory-grid" className="scroll-mt-20 space-y-6">
                         <ScrollReveal
                           y={24}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                          className="flex flex-col sm:flex-row sm:items-end justify-between gap-4"
                         >
-                          <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-tight text-white">
-                            Showroom{' '}
-                            <span className="font-normal text-zinc-400">
-                              at {store.branding.companyName}
-                            </span>
-                          </h2>
+                          <div className="space-y-1">
+                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#E11D2A]">
+                              Featured Collection
+                            </p>
+                            <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white">
+                              Handpicked Excellence{' '}
+                              <span className="font-normal text-zinc-400">
+                                at {store.branding.companyName}
+                              </span>
+                            </h2>
+                          </div>
 
                           <div
                             role="tablist"
                             aria-label="Filter vehicle availability"
-                            className="inline-flex items-center gap-1 bg-[#141418] border border-zinc-800 rounded-lg p-1 self-start sm:self-auto"
+                            className="inline-flex items-center gap-1 bg-[#111115] border border-white/[0.08] rounded-xl p-1 self-start sm:self-auto"
                           >
                             {(
                               [
@@ -893,9 +975,9 @@ export default function App() {
                                 role="tab"
                                 aria-selected={showcaseTab === tab.id}
                                 onClick={() => setShowcaseTab(tab.id)}
-                                className={`px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded-md transition-colors cursor-pointer ${
+                                className={`px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
                                   showcaseTab === tab.id
-                                    ? 'bg-[#D92027] text-white'
+                                    ? 'bg-[#E11D2A] text-white'
                                     : 'text-zinc-400 hover:text-white'
                                 }`}
                               >
@@ -906,18 +988,18 @@ export default function App() {
                         </ScrollReveal>
 
                         {!loaded && store.vehicles.length === 0 ? (
-                          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-3.5">
+                          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-5 lg:gap-6">
                             {[1, 2, 3, 4, 5, 6].map((n) => (
                               <div
                                 key={n}
-                                className="h-56 rounded-lg bg-[#141418] border border-zinc-800 animate-pulse"
+                                className="h-56 sm:h-80 rounded-xl sm:rounded-2xl bg-[#111115] border border-white/[0.08] animate-pulse"
                               />
                             ))}
                           </div>
                         ) : filteredVehicles.length === 0 ? (
                           <ScrollReveal
                             y={24}
-                            className="border border-zinc-800 rounded-xl p-12 text-center space-y-3 bg-[#141418]"
+                            className="border border-white/[0.08] rounded-2xl p-12 text-center space-y-3 bg-[#111115]"
                           >
                             <h3 className="font-display text-lg font-semibold text-white">
                               No matching vehicles found
@@ -931,7 +1013,7 @@ export default function App() {
                                 setFilters(INITIAL_FILTERS);
                                 setShowcaseTab('all');
                               }}
-                              className="inline-flex items-center px-4 py-2 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs font-semibold rounded-lg cursor-pointer"
+                              className="inline-flex items-center px-5 py-2.5 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-full cursor-pointer"
                             >
                               Show All Vehicles
                             </button>
@@ -939,7 +1021,7 @@ export default function App() {
                         ) : (
                           <div
                             data-testid="vehicle-grid"
-                            className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-3.5"
+                            className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-5 lg:gap-6"
                           >
                             {filteredVehicles.map((vehicle, idx) => (
                               <VehicleCard
@@ -954,6 +1036,12 @@ export default function App() {
                         )}
                       </div>
                     </section>
+
+                    <HowItWorksSection
+                      brands={filterOptions.makes}
+                      onStartOrder={() => navigateToSection('location-contact')}
+                      onBrowseCollection={() => navigateToSection('inventory-grid')}
+                    />
 
                     <TikTokShowcase tiktok={store.tiktok} />
 
@@ -1042,6 +1130,7 @@ export default function App() {
             branding={store.branding}
             contact={store.contact}
             tiktok={store.tiktok}
+            onNavigateSection={navigateToSection}
           />
         )}
       </div>

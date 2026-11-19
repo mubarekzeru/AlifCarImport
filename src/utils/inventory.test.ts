@@ -10,6 +10,8 @@ import {
   isTikTokVideoUrl,
   filterActiveTikTokPosts,
   resolveTikTokAdminCardMode,
+  isPlaceholderTikTokCover,
+  shouldAutoFetchTikTokCover,
   deriveTitleFromVideoDescription,
   validateVehicleInput,
   buildWhatsAppHref,
@@ -22,7 +24,11 @@ import {
   getAvailableColorSwatches,
   splitDisplayBrandLines,
   resolvePublicAssetUrl,
+  resolveHeroVideoUrl,
   isAuthorizedAdminEmail,
+  needsCatalogSyncToFirestore,
+  findLegacyDuplicateVehicleIds,
+  mergeRemoteVehiclesWithCatalog,
 } from './inventory';
 import type { Vehicle } from '../types/showroom';
 
@@ -281,6 +287,54 @@ test('resolveTikTokAdminCardMode collapses published posts unless explicitly ope
   );
 });
 
+test('shouldAutoFetchTikTokCover triggers for missing covers and when a post switches to a different TikTok video URL', () => {
+  assert.equal(isPlaceholderTikTokCover(''), true);
+  assert.equal(isPlaceholderTikTokCover('/assets/aistudio/hero.jpg'), true);
+  assert.equal(isPlaceholderTikTokCover('data:image/jpeg;base64,abc'), false);
+
+  // Valid link with empty cover -> must fetch
+  assert.equal(
+    shouldAutoFetchTikTokCover({
+      tiktokUrl: 'https://vt.tiktok.com/ZSpbrcUvR/',
+      coverImageUrl: '',
+    }),
+    true
+  );
+
+  // Already fetched same URL with real cover -> no refetch needed
+  assert.equal(
+    shouldAutoFetchTikTokCover(
+      {
+        tiktokUrl: 'https://vt.tiktok.com/ZSpbrcUvR/',
+        coverImageUrl: 'data:image/jpeg;base64,abc',
+      },
+      'https://vt.tiktok.com/ZSpbrcUvR/'
+    ),
+    false
+  );
+
+  // Switched to a different video URL even though old cover exists -> must fetch new video cover
+  assert.equal(
+    shouldAutoFetchTikTokCover(
+      {
+        tiktokUrl: 'https://www.tiktok.com/@alif_car_import/video/7653002113408077064',
+        coverImageUrl: 'data:image/jpeg;base64,old-cover',
+      },
+      'https://vt.tiktok.com/ZSpbrcUvR/'
+    ),
+    true
+  );
+
+  // Non-video profile URL -> never auto-fetch
+  assert.equal(
+    shouldAutoFetchTikTokCover({
+      tiktokUrl: 'https://www.tiktok.com/@alif.car1',
+      coverImageUrl: '',
+    }),
+    false
+  );
+});
+
 test('buildSocialMediaUrl resolves usernames, handles, and full URLs across platforms', () => {
   assert.equal(buildSocialMediaUrl('telegram', '@alif_cars'), 'https://t.me/alif_cars');
   assert.equal(buildSocialMediaUrl('telegram', 't.me/alif_cars'), 'https://t.me/alif_cars');
@@ -496,3 +550,66 @@ test('resolvePublicAssetUrl rebases stored /assets and /AlifCarImport/assets pat
   assert.equal(resolvePublicAssetUrl('data:image/png;base64,abc', '/'), 'data:image/png;base64,abc');
   assert.equal(resolvePublicAssetUrl('https://cdn.example.com/logo.png', '/AlifCarImport/'), 'https://cdn.example.com/logo.png');
 });
+
+test('resolveHeroVideoUrl switches legacy default video paths to the current default while keeping custom videos', () => {
+  assert.equal(
+    resolveHeroVideoUrl(
+      '/AlifCarImport/assets/aistudio/gemini_generated_video_9a151ab3_e5ba47be.mp4',
+      '/assets/aistudio/Alif_Car_Import_Premium_Vehicles_b269f200.mp4',
+      '/AlifCarImport/'
+    ),
+    '/AlifCarImport/assets/aistudio/Alif_Car_Import_Premium_Vehicles_b269f200.mp4'
+  );
+  assert.equal(
+    resolveHeroVideoUrl(
+      '',
+      '/assets/aistudio/Alif_Car_Import_Premium_Vehicles_b269f200.mp4',
+      '/'
+    ),
+    '/assets/aistudio/Alif_Car_Import_Premium_Vehicles_b269f200.mp4'
+  );
+  assert.equal(
+    resolveHeroVideoUrl(
+      'https://cdn.example.com/custom-showroom-reel.mp4',
+      '/assets/aistudio/Alif_Car_Import_Premium_Vehicles_b269f200.mp4',
+      '/'
+    ),
+    'https://cdn.example.com/custom-showroom-reel.mp4'
+  );
+});
+
+test('mergeRemoteVehiclesWithCatalog merges unsynced legacy Firestore docs without duplicating titles and respects synced deletions', () => {
+  const catalog: Vehicle[] = [
+    { ...SAMPLE_VEHICLES[0], id: 'song-plus', title: 'Song Plus' },
+    { ...SAMPLE_VEHICLES[1], id: 'sealion-05', title: 'Sealion 05' },
+    { ...SAMPLE_VEHICLES[2], id: 'byd-e2', title: 'BYD E2' },
+  ];
+
+  // Unsynced Firestore containing 2 partial legacy entries + 1 unique custom car
+  const legacyRemote: Vehicle[] = [
+    { ...SAMPLE_VEHICLES[0], id: 'veh_2025_suv_1641f7', title: 'Song Plus' },
+    { ...SAMPLE_VEHICLES[1], id: 'veh_2024_suv_94b657', title: 'Sealion 05' },
+    { ...SAMPLE_VEHICLES[2], id: 'veh_custom_1', title: 'Custom Showroom Import' },
+  ];
+
+  assert.equal(needsCatalogSyncToFirestore(legacyRemote, catalog), true);
+  assert.deepEqual(findLegacyDuplicateVehicleIds(legacyRemote, catalog), [
+    'veh_2025_suv_1641f7',
+    'veh_2024_suv_94b657',
+  ]);
+
+  const mergedUnsynced = mergeRemoteVehiclesWithCatalog(legacyRemote, catalog);
+  assert.deepEqual(
+    mergedUnsynced.map((v) => v.id),
+    ['veh_custom_1', 'song-plus', 'sealion-05', 'byd-e2']
+  );
+
+  // Once synced (at least one canonical ID present), Firestore is authoritative even if admin deleted a car
+  const syncedAfterAdminDelete: Vehicle[] = [catalog[0], catalog[2]];
+  assert.equal(needsCatalogSyncToFirestore(syncedAfterAdminDelete, catalog), false);
+  assert.deepEqual(
+    mergeRemoteVehiclesWithCatalog(syncedAfterAdminDelete, catalog).map((v) => v.id),
+    ['song-plus', 'byd-e2']
+  );
+});
+

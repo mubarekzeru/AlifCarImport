@@ -1,4 +1,3 @@
-import { MapPin, Phone } from 'lucide-react';
 import { ALIF_DEFAULT_LOGO } from '../data/seedData';
 import type { BrandingSettings, LocationContact, TikTokSectionConfig } from '../types/showroom';
 import { getConfiguredSocialLinks, resolvePublicAssetUrl } from '../utils/inventory';
@@ -9,17 +8,46 @@ interface FooterProps {
   branding: BrandingSettings;
   contact: LocationContact;
   tiktok: TikTokSectionConfig;
+  onNavigateSection?: (sectionId: string) => void;
+}
+
+function renderTwoToneBrand(companyName: string, fallbackTagline: string) {
+  const normalized = companyName.trim() || 'Alif Car Import';
+  const match = normalized.match(/^(Alif)\s+(Car)\s*(.*)$/i);
+  if (match) {
+    const [, firstWord, secondWord, rest] = match;
+    return (
+      <div>
+        <span className="font-display text-lg font-bold tracking-tight text-white block leading-none">
+          {firstWord} <span className="text-[#E11D2A]">{secondWord}</span>
+        </span>
+        <span className="text-[10px] font-medium uppercase tracking-[0.22em] text-zinc-400 block mt-1">
+          {rest.trim() || fallbackTagline || 'Import'}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <span className="font-display text-base font-bold text-white block uppercase tracking-wide">
+        {normalized}
+      </span>
+      <span className="text-[11px] text-zinc-400 block">{fallbackTagline}</span>
+    </div>
+  );
 }
 
 export function Footer({ branding, contact, tiktok }: FooterProps) {
   const socialLinks = getConfiguredSocialLinks(contact, tiktok, branding.companyName);
 
   return (
-    <footer className="border-t border-zinc-800 bg-[#070709] text-zinc-400">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
-          <ScrollReveal y={24} className="space-y-3">
-            <div className="flex items-center gap-3">
+    <footer className="border-t border-white/[0.07] bg-[#060608] text-zinc-400">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 pb-8 sm:pt-16 sm:pb-10">
+        <div>
+          {/* Brand Column + Circular Social Buttons */}
+          <ScrollReveal y={20} className="space-y-5">
+            <div className="flex items-center gap-3.5">
               {(branding.logoUrl || ALIF_DEFAULT_LOGO) && (
                 <img
                   src={resolvePublicAssetUrl(branding.logoUrl) || ALIF_DEFAULT_LOGO}
@@ -33,49 +61,31 @@ export function Footer({ branding, contact, tiktok }: FooterProps) {
                   className="w-11 h-11 rounded-full object-cover bg-white shrink-0 shadow-sm"
                 />
               )}
-              <div>
-                <span className="font-display text-base font-bold text-white block uppercase tracking-wide">
-                  {branding.companyName}
-                </span>
-                <span className="text-xs text-zinc-400">{branding.tagline}</span>
-              </div>
+              {renderTwoToneBrand(branding.companyName, branding.tagline)}
             </div>
-            <p className="text-xs text-zinc-400 leading-relaxed max-w-sm">
-              Direct global automotive sourcing, transparent inspection records, and showroom delivery.
-            </p>
-          </ScrollReveal>
 
-          <ScrollReveal y={24} delay={0.07} className="space-y-2 text-xs">
-            <p className="font-semibold text-white uppercase tracking-wider">Showroom Location</p>
-            <p className="flex items-start gap-2 text-zinc-300">
-              <MapPin className="w-4 h-4 text-[#D92027] shrink-0 mt-0.5" aria-hidden="true" />
-              <span>
-                {contact.addressLine}, {contact.cityCountry}
-              </span>
+            <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed max-w-sm">
+              {branding.companyName} — your trusted partner for global vehicle imports. Curated inventory, transparent pricing, and dedicated service.
             </p>
-            <p className="flex items-center gap-2 text-zinc-300 tabular-nums">
-              <Phone className="w-4 h-4 text-zinc-400 shrink-0" aria-hidden="true" />
-              <span>{contact.phone}</span>
-            </p>
-            <p className="text-zinc-500">{contact.hours}</p>
-          </ScrollReveal>
 
-          <ScrollReveal y={24} delay={0.14} className="space-y-3 text-xs">
-            <p className="font-semibold text-white uppercase tracking-wider">Connect</p>
-            <SocialMediaIconRow links={socialLinks} companyName={branding.companyName} />
+            {socialLinks.length > 0 && (
+              <div className="space-y-3 pt-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
+                  Follow Us
+                </p>
+                <SocialMediaIconRow
+                  links={socialLinks}
+                  companyName={branding.companyName}
+                  variant="circle"
+                />
+              </div>
+            )}
           </ScrollReveal>
         </div>
 
-        <ScrollReveal
-          y={16}
-          delay={0.16}
-          className="mt-10 pt-6 border-t border-zinc-800/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500"
-        >
-          <span>
-            © {new Date().getFullYear()} {branding.companyName}. All rights reserved.
-          </span>
-          <span>{contact.email}</span>
-        </ScrollReveal>
+        <div className="mt-12 pt-6 border-t border-white/[0.07] text-center text-xs text-zinc-500">
+          © {new Date().getFullYear()} {branding.companyName}. All rights reserved.
+        </div>
       </div>
     </footer>
   );

@@ -213,13 +213,13 @@ export function SearchFilterBar({
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, amount: 'some' }}
       transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
-      className="bg-[#141418] border border-zinc-800 rounded-xl p-3 sm:p-4 shadow-2xl space-y-3"
+      className="bg-[#111115] border border-white/[0.08] rounded-2xl p-3.5 sm:p-5 shadow-2xl space-y-3.5"
     >
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
-        {/* Left Title Block matching Rvinyl "SHOP BY VEHICLE" */}
+        {/* Left Title Block */}
         <div className="lg:col-span-2 flex items-center justify-between lg:justify-start gap-2.5 px-1 sm:px-2 py-1">
           <div className="flex items-center gap-2">
-            <Car className="w-4 h-4 text-[#D92027] shrink-0" aria-hidden="true" />
+            <Car className="w-4 h-4 text-[#E11D2A] shrink-0" aria-hidden="true" />
             <span className="font-display text-xs font-bold uppercase tracking-wider text-white whitespace-nowrap">
               Shop By Vehicle
             </span>
@@ -366,7 +366,7 @@ export function SearchFilterBar({
                 document.getElementById('inventory-grid')?.scrollIntoView({ behavior: 'smooth' });
               }
             }}
-            className="w-full h-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="w-full h-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs sm:text-sm font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <span>Find Vehicles</span>
             <ArrowRight className="w-4 h-4 shrink-0" aria-hidden="true" />

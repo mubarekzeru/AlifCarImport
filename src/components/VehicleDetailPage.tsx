@@ -20,6 +20,7 @@ import {
   getSimilarVehicles,
   getVehicleGalleryImages,
   getVehiclePricingBreakdown,
+  resolvePublicAssetUrl,
 } from '../utils/inventory';
 import { ScrollReveal } from './ScrollReveal';
 import { VehicleCard } from './VehicleCard';
@@ -51,7 +52,10 @@ export function VehicleDetailPage({
   onFilterByMake,
   onSelectVehicle,
 }: VehicleDetailPageProps) {
-  const images = useMemo(() => getVehicleGalleryImages(vehicle), [vehicle]);
+  const images = useMemo(
+    () => getVehicleGalleryImages(vehicle).map((u) => resolvePublicAssetUrl(u)),
+    [vehicle]
+  );
   const [activeIndex, setActiveIndex] = useState(0);
   const [thumbPage, setThumbPage] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -97,7 +101,7 @@ export function VehicleDetailPage({
   const thumbStart = thumbPage * THUMBS_PER_PAGE;
   const visibleThumbs = images.slice(thumbStart, thumbStart + THUMBS_PER_PAGE);
 
-  const currentImage = images[activeIndex] || vehicle.imageUrl;
+  const currentImage = images[activeIndex] || resolvePublicAssetUrl(vehicle.imageUrl);
   const modelDisplay = formatVehicleTileModel(vehicle);
   const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
 
@@ -528,7 +532,7 @@ export function VehicleDetailPage({
                 <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-zinc-300">
                   Vehicle Description
                 </h2>
-                <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed whitespace-pre-line">
                   {vehicle.description}
                 </p>
               </div>

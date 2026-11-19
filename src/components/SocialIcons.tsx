@@ -108,16 +108,34 @@ export function SocialMediaIconRow({
   links,
   companyName,
   showLabels = false,
+  variant = 'tile',
 }: {
   links: ConfiguredSocialLink[];
   companyName: string;
   showLabels?: boolean;
+  variant?: 'tile' | 'circle';
 }) {
   if (links.length === 0) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       {links.map((item) => {
+        if (variant === 'circle') {
+          return (
+            <a
+              key={item.platform}
+              href={item.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${companyName} on ${item.label}`}
+              title={`${item.label}: ${item.handleText}`}
+              className="w-10 h-10 rounded-full bg-white/[0.04] border border-white/[0.08] hover:border-[#E11D2A]/60 hover:bg-white/[0.08] text-zinc-300 hover:text-white inline-flex items-center justify-center transition-colors"
+            >
+              <SocialPlatformIcon platform={item.platform} className="w-4 h-4" />
+            </a>
+          );
+        }
+
         const styles = PLATFORM_STYLES[item.platform];
         return (
           <a

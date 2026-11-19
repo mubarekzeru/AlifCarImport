@@ -11,18 +11,35 @@ import {
   checkFirestoreHasShowroom,
   fetchAdminAllowlistFromFirestore,
   fetchInquiriesFromFirestore,
+  fetchRemoteVehicleSummariesFromFirestore,
   resetFirestoreToDefaults,
   submitInquiryToFirestore,
+  syncCatalogVehiclesToFirestore,
   syncShowroomStoreToFirestore,
 } from './firestoreStore';
+import { compressImageUrlToDataUrl } from './imageUpload';
 import {
   deriveTitleFromVideoDescription,
+  findLegacyDuplicateVehicleIds,
   isAuthorizedAdminEmail,
+  mergeRemoteVehiclesWithCatalog,
+  needsCatalogSyncToFirestore,
   normalizeTikTokUrl,
+  resolveHeroVideoUrl,
   resolvePublicAssetUrl,
 } from './inventory';
 
 function normalizeStoreAssetPaths(store: ShowroomStore): ShowroomStore {
+  const normalizedVehicles = Array.isArray(store.vehicles)
+    ? store.vehicles.map((v) => ({
+        ...v,
+        imageUrl: resolvePublicAssetUrl(v.imageUrl),
+        galleryImages: Array.isArray(v.galleryImages)
+          ? v.galleryImages.map((u) => resolvePublicAssetUrl(u))
+          : [],
+      }))
+    : INITIAL_SHOWROOM_STORE.vehicles;
+
   return {
     ...store,
     branding: {
@@ -32,8 +49,9 @@ function normalizeStoreAssetPaths(store: ShowroomStore): ShowroomStore {
     hero: {
       ...store.hero,
       imageUrl: resolvePublicAssetUrl(store.hero?.imageUrl),
-      videoUrl: resolvePublicAssetUrl(store.hero?.videoUrl) || INITIAL_SHOWROOM_STORE.hero.videoUrl,
+      videoUrl: resolveHeroVideoUrl(store.hero?.videoUrl, INITIAL_SHOWROOM_STORE.hero.videoUrl),
     },
+    vehicles: mergeRemoteVehiclesWithCatalog(normalizedVehicles, INITIAL_SHOWROOM_STORE.vehicles),
   };
 }
 
@@ -198,6 +216,15 @@ export async function ensureFirestoreSeeded(seedStore: ShowroomStore): Promise<v
   const hasRemote = await checkFirestoreHasShowroom();
   if (!hasRemote) {
     await syncShowroomStoreToFirestore(seedStore, null, true);
+    return;
+  }
+  const existingVehicles = await fetchRemoteVehicleSummariesFromFirestore();
+  if (needsCatalogSyncToFirestore(existingVehicles, INITIAL_SHOWROOM_STORE.vehicles)) {
+    const legacyDuplicateIds = findLegacyDuplicateVehicleIds(
+      existingVehicles,
+      INITIAL_SHOWROOM_STORE.vehicles
+    );
+    await syncCatalogVehiclesToFirestore(INITIAL_SHOWROOM_STORE.vehicles, legacyDuplicateIds);
   }
 }
 
@@ -205,20 +232,29 @@ export async function logoutAdmin(): Promise<void> {
   await signOut(auth).catch(() => undefined);
 }
 
+function isStaticGitHubPagesHost(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.location.hostname.toLowerCase().endsWith('.github.io')
+  );
+}
+
 export async function loadShowroomStore(): Promise<ShowroomStore> {
   // Check Express dev server store first if present (helpful for initial seeding before Firebase has docs)
-  try {
-    const response = await fetch('/api/store', { credentials: 'same-origin' });
-    if (response.ok) {
-      const json = (await response.json()) as { initialized?: boolean; data?: ShowroomStore | null };
-      if (json.initialized && json.data && Array.isArray(json.data.vehicles)) {
-        const normalized = normalizeStoreAssetPaths(json.data);
-        cacheShowroomStoreLocally(normalized);
-        return normalized;
+  if (!isStaticGitHubPagesHost()) {
+    try {
+      const response = await fetch('/api/store', { credentials: 'same-origin' });
+      if (response.ok) {
+        const json = (await response.json()) as { initialized?: boolean; data?: ShowroomStore | null };
+        if (json.initialized && json.data && Array.isArray(json.data.vehicles)) {
+          const normalized = normalizeStoreAssetPaths(json.data);
+          cacheShowroomStoreLocally(normalized);
+          return normalized;
+        }
       }
+    } catch {
+      // Expected on static hosting without Express backend
     }
-  } catch {
-    // Expected on static hosting (e.g. GitHub Pages) without Express backend
   }
 
   return readCachedShowroomStore() ?? INITIAL_SHOWROOM_STORE;
@@ -314,45 +350,73 @@ async function tryConvertRemoteCoverToDataUrl(imageUrl: string): Promise<string>
   }
 }
 
+async function finalizeCoverDataUrl(imageUrl: string): Promise<string> {
+  if (!imageUrl) return '';
+  const fetched = imageUrl.startsWith('http')
+    ? await tryConvertRemoteCoverToDataUrl(imageUrl)
+    : imageUrl;
+  return compressImageUrlToDataUrl(fetched, 640, 190_000);
+}
+
 export async function fetchTikTokVideoMetadata(url: string): Promise<TikTokMetadataResult> {
   const normalizedUrl = normalizeTikTokUrl(url);
+  let partialFromServer: Partial<TikTokMetadataResult> | null = null;
 
   // 1. Try local Express metadata endpoint first when running on AI Studio / Node server
-  try {
-    const response = await fetch('/api/tiktok-metadata', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: normalizedUrl }),
-    });
-    const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      const json = (await response.json().catch(() => ({}))) as Partial<TikTokMetadataResult> & {
-        error?: string;
-      };
-      if (response.ok) {
-        return {
-          resolvedUrl: json.resolvedUrl || normalizedUrl,
-          videoId: json.videoId || null,
-          description: json.description || '',
-          suggestedTitle: json.suggestedTitle || '',
-          coverImageUrl: json.coverImageUrl || '',
-          coverOptions: Array.isArray(json.coverOptions) ? json.coverOptions : [],
-          authorHandle: json.authorHandle || '',
+  if (!isStaticGitHubPagesHost()) {
+    try {
+      const response = await fetch('/api/tiktok-metadata', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: normalizedUrl }),
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const json = (await response.json().catch(() => ({}))) as Partial<TikTokMetadataResult> & {
+          error?: string;
         };
+        if (response.ok) {
+          const rawOptions = Array.isArray(json.coverOptions) ? json.coverOptions : [];
+          const compactedOptions = await Promise.all(
+            rawOptions.map(async (opt) => ({
+              label: opt.label,
+              url: await finalizeCoverDataUrl(opt.url),
+            }))
+          );
+          const primaryCover =
+            compactedOptions[0]?.url ||
+            (json.coverImageUrl ? await finalizeCoverDataUrl(json.coverImageUrl) : '');
+
+          const result: TikTokMetadataResult = {
+            resolvedUrl: json.resolvedUrl || normalizedUrl,
+            videoId: json.videoId || null,
+            description: json.description || '',
+            suggestedTitle: json.suggestedTitle || '',
+            coverImageUrl: primaryCover,
+            coverOptions: compactedOptions,
+            authorHandle: json.authorHandle || '',
+          };
+
+          if (result.coverImageUrl) {
+            return result;
+          }
+          // Server succeeded without a cover image — keep its text metadata and continue to fallbacks
+          partialFromServer = result;
+        }
+        if (response.status >= 400 && response.status < 500 && response.status !== 404 && response.status !== 405) {
+          throw new Error(json.error || 'Unable to fetch video details from TikTok.');
+        }
       }
-      if (response.status >= 400 && response.status < 500 && response.status !== 404 && response.status !== 405) {
-        throw new Error(json.error || 'Unable to fetch video details from TikTok.');
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('valid TikTok URL')) {
+        throw err;
       }
+      // Static hosting does not run Express /api/tiktok-metadata — fall through
     }
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('valid TikTok URL')) {
-      throw err;
-    }
-    // Static hosting (GitHub Pages) does not run Express /api/tiktok-metadata — fall through
   }
 
-  // 2. Client-side CORS fallback for static deployments (GitHub Pages)
+  // 2. Client-side CORS fallback for static deployments (GitHub Pages) or empty server cover
   try {
     const apiRes = await fetch(
       `https://www.tikwm.com/api/?url=${encodeURIComponent(normalizedUrl)}`
@@ -365,19 +429,24 @@ export async function fetchTikTokVideoMetadata(url: string): Promise<TikTokMetad
           title?: string;
           cover?: string;
           origin_cover?: string;
+          images?: string[];
           author?: { unique_id?: string };
         };
       };
       const item = payload?.data;
       if (payload?.code === 0 && item) {
-        const videoId = item.id || null;
-        const authorHandle = item.author?.unique_id ? `@${item.author.unique_id}` : '';
+        const videoId = item.id || partialFromServer?.videoId || null;
+        const authorHandle =
+          (item.author?.unique_id ? `@${item.author.unique_id}` : '') ||
+          partialFromServer?.authorHandle ||
+          '';
         const resolvedUrl =
           videoId && item.author?.unique_id
             ? `https://www.tiktok.com/@${item.author.unique_id}/video/${videoId}`
-            : normalizedUrl;
-        const description = (item.title || '').trim();
-        const suggestedTitle = deriveTitleFromVideoDescription(description);
+            : partialFromServer?.resolvedUrl || normalizedUrl;
+        const description = (item.title || '').trim() || partialFromServer?.description || '';
+        const suggestedTitle =
+          deriveTitleFromVideoDescription(description) || partialFromServer?.suggestedTitle || '';
         const rawCandidates: { label: string; url: string }[] = [];
         if (typeof item.cover === 'string' && item.cover.startsWith('http')) {
           rawCandidates.push({ label: 'Video Cover', url: item.cover });
@@ -389,10 +458,17 @@ export async function fetchTikTokVideoMetadata(url: string): Promise<TikTokMetad
         ) {
           rawCandidates.push({ label: 'Clean Video Frame', url: item.origin_cover });
         }
+        if (
+          Array.isArray(item.images) &&
+          typeof item.images[0] === 'string' &&
+          item.images[0].startsWith('http')
+        ) {
+          rawCandidates.push({ label: 'Photo Cover', url: item.images[0] });
+        }
         const coverOptions = await Promise.all(
           rawCandidates.map(async (c) => ({
             label: c.label,
-            url: await tryConvertRemoteCoverToDataUrl(c.url),
+            url: await finalizeCoverDataUrl(c.url),
           }))
         );
         return {
@@ -421,20 +497,36 @@ export async function fetchTikTokVideoMetadata(url: string): Promise<TikTokMetad
       author_name?: string;
       embed_product_id?: string;
     };
-    const description = (oe.title || '').trim();
-    const suggestedTitle = deriveTitleFromVideoDescription(description);
+    const description = (oe.title || '').trim() || partialFromServer?.description || '';
+    const suggestedTitle =
+      deriveTitleFromVideoDescription(description) || partialFromServer?.suggestedTitle || '';
     const rawThumb =
       typeof oe.thumbnail_url === 'string' && oe.thumbnail_url.startsWith('http')
-        ? await tryConvertRemoteCoverToDataUrl(oe.thumbnail_url)
+        ? await finalizeCoverDataUrl(oe.thumbnail_url)
         : '';
     return {
-      resolvedUrl: normalizedUrl,
-      videoId: oe.embed_product_id || null,
+      resolvedUrl: partialFromServer?.resolvedUrl || normalizedUrl,
+      videoId: oe.embed_product_id || partialFromServer?.videoId || null,
       description,
       suggestedTitle,
       coverImageUrl: rawThumb,
       coverOptions: rawThumb ? [{ label: 'Video Cover', url: rawThumb }] : [],
-      authorHandle: oe.author_name ? `@${oe.author_name.replace(/^@/, '')}` : '',
+      authorHandle:
+        (oe.author_name ? `@${oe.author_name.replace(/^@/, '')}` : '') ||
+        partialFromServer?.authorHandle ||
+        '',
+    };
+  }
+
+  if (partialFromServer) {
+    return {
+      resolvedUrl: partialFromServer.resolvedUrl || normalizedUrl,
+      videoId: partialFromServer.videoId || null,
+      description: partialFromServer.description || '',
+      suggestedTitle: partialFromServer.suggestedTitle || '',
+      coverImageUrl: partialFromServer.coverImageUrl || '',
+      coverOptions: partialFromServer.coverOptions || [],
+      authorHandle: partialFromServer.authorHandle || '',
     };
   }
 

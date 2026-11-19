@@ -176,6 +176,32 @@ export function resolveTikTokAdminCardMode(
   return isTikTokVideoUrl(tiktokUrl) ? 'collapsed' : 'edit';
 }
 
+export function isPlaceholderTikTokCover(url?: string): boolean {
+  const trimmed = (url ?? '').trim();
+  if (!trimmed) return true;
+  return trimmed.startsWith('/src/assets/images/') || trimmed.includes('/assets/aistudio/');
+}
+
+export function shouldAutoFetchTikTokCover(
+  post: { tiktokUrl: string; coverImageUrl?: string },
+  lastFetchedUrl?: string
+): boolean {
+  const normalized = normalizeTikTokUrl(post.tiktokUrl);
+  if (!isTikTokVideoUrl(normalized)) return false;
+
+  const prevNormalized = lastFetchedUrl ? normalizeTikTokUrl(lastFetchedUrl) : '';
+  if (prevNormalized && prevNormalized === normalized) {
+    return isPlaceholderTikTokCover(post.coverImageUrl);
+  }
+
+  // Either URL is newly entered/changed, or cover is missing/placeholder
+  if (!prevNormalized) {
+    return isPlaceholderTikTokCover(post.coverImageUrl);
+  }
+
+  return true;
+}
+
 const GENERIC_TIKTOK_HASHTAGS = new Set([
   'alifcarimport',
   'alif_car_import',
@@ -817,3 +843,66 @@ export function resolvePublicAssetUrl(rawUrl?: string, baseUrlOverride?: string)
 
   return trimmed;
 }
+
+const LEGACY_DEFAULT_HERO_VIDEO_TOKEN = 'gemini_generated_video_9a151ab3_e5ba47be';
+
+export function resolveHeroVideoUrl(
+  rawUrl?: string,
+  defaultHeroVideoUrl = '/assets/aistudio/Alif_Car_Import_Premium_Vehicles_b269f200.mp4',
+  baseUrlOverride?: string
+): string {
+  const resolved = resolvePublicAssetUrl(rawUrl, baseUrlOverride);
+  if (!resolved || resolved.includes(LEGACY_DEFAULT_HERO_VIDEO_TOKEN)) {
+    return resolvePublicAssetUrl(defaultHeroVideoUrl, baseUrlOverride);
+  }
+  return resolved;
+}
+
+function normalizeVehicleTitleKey(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function needsCatalogSyncToFirestore(
+  remoteVehicles: Pick<Vehicle, 'id'>[],
+  catalogVehicles: Pick<Vehicle, 'id'>[]
+): boolean {
+  if (catalogVehicles.length === 0) return false;
+  const canonicalIds = new Set(catalogVehicles.map((v) => v.id));
+  return !remoteVehicles.some((v) => canonicalIds.has(v.id));
+}
+
+export function findLegacyDuplicateVehicleIds(
+  remoteVehicles: Pick<Vehicle, 'id' | 'title'>[],
+  catalogVehicles: Pick<Vehicle, 'id' | 'title'>[]
+): string[] {
+  const canonicalIds = new Set(catalogVehicles.map((v) => v.id));
+  const catalogTitleKeys = new Set(
+    catalogVehicles.map((v) => normalizeVehicleTitleKey(v.title)).filter(Boolean)
+  );
+  return remoteVehicles
+    .filter(
+      (v) =>
+        !canonicalIds.has(v.id) &&
+        catalogTitleKeys.has(normalizeVehicleTitleKey(v.title))
+    )
+    .map((v) => v.id);
+}
+
+export function mergeRemoteVehiclesWithCatalog(
+  remoteVehicles: Vehicle[],
+  catalogVehicles: Vehicle[]
+): Vehicle[] {
+  if (!needsCatalogSyncToFirestore(remoteVehicles, catalogVehicles)) {
+    return remoteVehicles;
+  }
+
+  const catalogTitleKeys = new Set(
+    catalogVehicles.map((v) => normalizeVehicleTitleKey(v.title)).filter(Boolean)
+  );
+  const nonDuplicateRemote = remoteVehicles.filter(
+    (v) => !catalogTitleKeys.has(normalizeVehicleTitleKey(v.title))
+  );
+
+  return [...nonDuplicateRemote, ...catalogVehicles];
+}
+

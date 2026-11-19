@@ -1,5 +1,6 @@
-import { useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
+  Car,
   Check,
   ChevronDown,
   ChevronUp,
@@ -10,17 +11,20 @@ import {
   Link2,
   Loader2,
   LogOut,
+  MapPin,
   Play,
   Plus,
   RefreshCw,
   Search,
   Send,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Trash2,
   Upload,
   X,
 } from 'lucide-react';
+import { ALIF_DEFAULT_LOGO } from '../data/seedData';
 import type {
   ShowroomStore,
   TikTokPost,
@@ -36,9 +40,12 @@ import {
   extractTikTokVideoId,
   filterVehicles,
   getConfiguredSocialLinks,
+  isPlaceholderTikTokCover,
   isTikTokVideoUrl,
   normalizeTikTokUrl,
+  resolvePublicAssetUrl,
   resolveTikTokAdminCardMode,
+  shouldAutoFetchTikTokCover,
 } from '../utils/inventory';
 import { fetchTikTokVideoMetadata } from '../utils/storeClient';
 import { SocialMediaIconRow } from './SocialIcons';
@@ -62,6 +69,7 @@ interface AdminDashboardProps {
 }
 
 type AdminTab = 'inventory' | 'tiktok' | 'contact';
+type InventorySort = 'newest' | 'price-desc' | 'price-asc' | 'year-desc';
 
 export function AdminDashboard({
   store,
@@ -74,7 +82,9 @@ export function AdminDashboard({
 }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('inventory');
   const [searchQuery, setSearchQuery] = useState('');
+  const [makeFilter, setMakeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<VehicleStatus | 'all'>('all');
+  const [sortBy, setSortBy] = useState<InventorySort>('newest');
   const [formOpen, setFormOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -87,6 +97,7 @@ export function AdminDashboard({
   const [syncingAllTikTok, setSyncingAllTikTok] = useState(false);
   const [publishingPostId, setPublishingPostId] = useState<string | null>(null);
   const [lastFetchedUrls, setLastFetchedUrls] = useState<Record<string, string>>({});
+  const autoFetchAttemptedRef = useRef<Record<string, string>>({});
   const [tiktokPostModes, setTiktokPostModes] = useState<
     Record<string, 'edit' | 'change-link'>
   >({});
@@ -98,17 +109,43 @@ export function AdminDashboard({
     sectionId?: string;
   } | null>(null);
 
-  const filteredInventory = filterVehicles(store.vehicles, {
-    query: searchQuery,
-    make: '',
-    model: '',
-    year: '',
-    status: statusFilter,
-  });
+  const availableMakes = useMemo(
+    () =>
+      Array.from(new Set(store.vehicles.map((v) => v.make).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [store.vehicles]
+  );
+
+  const filteredInventory = useMemo(() => {
+    const base = filterVehicles(store.vehicles, {
+      query: searchQuery,
+      make: makeFilter,
+      model: '',
+      year: '',
+      status: statusFilter,
+    });
+    if (sortBy === 'price-desc') {
+      return [...base].sort((a, b) => b.price - a.price);
+    }
+    if (sortBy === 'price-asc') {
+      return [...base].sort((a, b) => a.price - b.price);
+    }
+    if (sortBy === 'year-desc') {
+      return [...base].sort((a, b) => b.year - a.year || b.price - a.price);
+    }
+    return base;
+  }, [store.vehicles, searchQuery, makeFilter, statusFilter, sortBy]);
 
   const availableCount = store.vehicles.filter((v) => v.status === 'available').length;
   const reservedCount = store.vehicles.filter((v) => v.status === 'reserved').length;
   const soldCount = store.vehicles.filter((v) => v.status === 'sold').length;
+  const featuredCount = store.vehicles.filter((v) => v.featured).length;
+  const totalCatalogValue = store.vehicles.reduce(
+    (sum, v) => (Number.isFinite(v.price) && v.price > 0 ? sum + v.price : sum),
+    0
+  );
+  const logoSrc = resolvePublicAssetUrl(store.branding.logoUrl) || ALIF_DEFAULT_LOGO;
 
   const handlePublishSection = async (label: string, sectionId?: string) => {
     const ok = await onUpdateStore((prev) => prev, true);
@@ -266,12 +303,6 @@ export function AdminDashboard({
     }
   };
 
-  const isPlaceholderTikTokCover = (url?: string): boolean => {
-    const trimmed = (url ?? '').trim();
-    if (!trimmed) return true;
-    return trimmed.startsWith('/src/assets/images/') || trimmed.includes('/assets/aistudio/');
-  };
-
   const handleAddTikTokPost = () => {
     const nextPost: TikTokPost = {
       id: `tt_${Date.now()}`,
@@ -353,9 +384,15 @@ export function AdminDashboard({
       return;
     }
 
+    const prevFetchedUrl = lastFetchedUrls[post.id]
+      ? normalizeTikTokUrl(lastFetchedUrls[post.id])
+      : '';
+    const isNewVideoLink = Boolean(prevFetchedUrl && prevFetchedUrl !== targetUrl);
+    autoFetchAttemptedRef.current[post.id] = targetUrl;
+
     setTiktokFetchStatus((prev) => ({
       ...prev,
-      [post.id]: { loading: true },
+      [post.id]: { loading: true, note: 'Extracting cover from TikTok video...' },
     }));
 
     try {
@@ -369,6 +406,7 @@ export function AdminDashboard({
         }));
       }
 
+      autoFetchAttemptedRef.current[post.id] = nextResolvedUrl;
       setLastFetchedUrls((prev) => ({
         ...prev,
         [post.id]: nextResolvedUrl,
@@ -380,10 +418,11 @@ export function AdminDashboard({
           ...prev.tiktok,
           posts: prev.tiktok.posts.map((current) => {
             if (current.id !== post.id) return current;
+            const shouldReplaceWithNewVideo = forceOverwrite || isNewVideoLink;
             const hasCustomCaption =
               Boolean(current.caption.trim()) && current.caption !== DEFAULT_TIKTOK_CAPTION;
             const nextDescription =
-              hasCustomCaption && !forceOverwrite
+              hasCustomCaption && !shouldReplaceWithNewVideo
                 ? current.caption
                 : meta.description || current.caption;
             const derivedTitle =
@@ -392,12 +431,12 @@ export function AdminDashboard({
             const hasCustomTitle =
               Boolean(current.title.trim()) && current.title !== DEFAULT_TIKTOK_TITLE;
             const nextTitle =
-              hasCustomTitle && !forceOverwrite
+              hasCustomTitle && !shouldReplaceWithNewVideo
                 ? current.title
                 : derivedTitle || current.title;
             const hasCustomCover = !isPlaceholderTikTokCover(current.coverImageUrl);
             const nextCover =
-              hasCustomCover && !forceOverwrite
+              hasCustomCover && !shouldReplaceWithNewVideo
                 ? current.coverImageUrl
                 : meta.coverImageUrl || meta.coverOptions[0]?.url || current.coverImageUrl;
 
@@ -418,8 +457,10 @@ export function AdminDashboard({
           loading: false,
           note:
             meta.coverOptions.length > 1
-              ? `Fetched description title & ${meta.coverOptions.length} video cover options`
-              : 'Fetched title & cover from video',
+              ? `Cover page extracted (${meta.coverOptions.length} options from video)`
+              : meta.coverImageUrl
+              ? 'Cover page extracted from TikTok video'
+              : 'Video link verified (no cover returned — upload or retry)',
         },
       }));
     } catch (err) {
@@ -435,6 +476,31 @@ export function AdminDashboard({
       }));
     }
   };
+
+  // Automatically extract the video cover page as soon as a valid TikTok link is entered or changed
+  useEffect(() => {
+    if (activeTab !== 'tiktok') return;
+    const timers: number[] = [];
+
+    for (const post of store.tiktok.posts) {
+      const normalized = normalizeTikTokUrl(post.tiktokUrl);
+      if (!isTikTokVideoUrl(normalized)) continue;
+      if (tiktokFetchStatus[post.id]?.loading) continue;
+      if (autoFetchAttemptedRef.current[post.id] === normalized) continue;
+      if (!shouldAutoFetchTikTokCover(post, lastFetchedUrls[post.id])) continue;
+
+      const timer = window.setTimeout(() => {
+        void handleFetchTikTokPostMetadata(post, normalized);
+      }, 450);
+      timers.push(timer);
+    }
+
+    return () => {
+      for (const t of timers) {
+        window.clearTimeout(t);
+      }
+    };
+  }, [activeTab, store.tiktok.posts, lastFetchedUrls, tiktokFetchStatus]);
 
   const handlePublishTikTokPost = async (post: TikTokPost) => {
     const normalized = normalizeTikTokUrl(post.tiktokUrl);
@@ -461,12 +527,17 @@ export function AdminDashboard({
     let fetchedDesc = '';
     let fetchedCover = '';
 
+    const prevFetchedUrl = lastFetchedUrls[post.id]
+      ? normalizeTikTokUrl(lastFetchedUrls[post.id])
+      : '';
+    const isNewVideoLink = Boolean(prevFetchedUrl && prevFetchedUrl !== normalized);
     const needsMetadata =
+      isNewVideoLink ||
       !post.title.trim() ||
       post.title === DEFAULT_TIKTOK_TITLE ||
       isPlaceholderTikTokCover(post.coverImageUrl);
 
-    if (needsMetadata && lastFetchedUrls[post.id] !== normalized) {
+    if (needsMetadata && prevFetchedUrl !== normalized) {
       try {
         const meta = await fetchTikTokVideoMetadata(normalized);
         resolvedUrl = meta.resolvedUrl || normalized;
@@ -481,6 +552,7 @@ export function AdminDashboard({
             [post.id]: meta.coverOptions,
           }));
         }
+        autoFetchAttemptedRef.current[post.id] = resolvedUrl;
         setLastFetchedUrls((prev) => ({ ...prev, [post.id]: resolvedUrl }));
       } catch {
         // Proceed with the user's manually entered link, title, and cover image
@@ -494,16 +566,19 @@ export function AdminDashboard({
         posts: prev.tiktok.posts.map((current) => {
           if (current.id !== post.id) return current;
           const keepTitle =
-            current.title.trim() && current.title !== DEFAULT_TIKTOK_TITLE
+            !isNewVideoLink && current.title.trim() && current.title !== DEFAULT_TIKTOK_TITLE
               ? current.title.trim()
               : fetchedTitle || current.title || 'TikTok Walkaround Video';
           const keepCaption =
-            current.caption.trim() && current.caption !== DEFAULT_TIKTOK_CAPTION
+            !isNewVideoLink &&
+            current.caption.trim() &&
+            current.caption !== DEFAULT_TIKTOK_CAPTION
               ? current.caption.trim()
               : fetchedDesc || current.caption;
-          const keepCover = !isPlaceholderTikTokCover(current.coverImageUrl)
-            ? current.coverImageUrl
-            : fetchedCover || current.coverImageUrl;
+          const keepCover =
+            !isNewVideoLink && !isPlaceholderTikTokCover(current.coverImageUrl)
+              ? current.coverImageUrl
+              : fetchedCover || current.coverImageUrl;
 
           return {
             ...current,
@@ -672,362 +747,847 @@ export function AdminDashboard({
     }
   };
 
+  const navItems: {
+    id: AdminTab;
+    label: string;
+    icon: typeof Car;
+    count?: number;
+  }[] = [
+    { id: 'inventory', label: 'Inventory Manager', icon: Car, count: store.vehicles.length },
+    { id: 'tiktok', label: 'TikTok Video Links', icon: Film, count: store.tiktok.posts.length },
+    { id: 'contact', label: 'Location & Contact', icon: MapPin },
+  ];
+
+  const activeNav = navItems.find((item) => item.id === activeTab) ?? navItems[0];
+
   return (
-    <main className="min-h-screen bg-[#0a0a0c] py-8 sm:py-10 text-zinc-100">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-zinc-800">
-          <div className="text-xs text-zinc-400">
-            {adminEmail && (
-              <span>
-                Signed in as <strong className="text-zinc-200 font-medium">{adminEmail}</strong>
-              </span>
-            )}
+    <div className="min-h-screen bg-[#08080a] text-zinc-100 flex flex-col lg:flex-row">
+      {/* Desktop Workspace Sidebar */}
+      <aside className="hidden lg:flex lg:flex-col w-64 shrink-0 bg-[#0d0d11] border-r border-white/[0.07] sticky top-0 h-screen">
+        <div className="px-5 py-5 border-b border-white/[0.07] flex items-center gap-3">
+          <img
+            src={logoSrc}
+            alt={store.branding.companyName}
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
+                e.currentTarget.src = ALIF_DEFAULT_LOGO;
+              }
+            }}
+            className="w-9 h-9 rounded-full object-cover bg-white ring-2 ring-white/15 shrink-0"
+          />
+          <div className="min-w-0">
+            <p className="font-display text-sm font-semibold text-white truncate">
+              {store.branding.companyName}
+            </p>
+            <p className="text-[11px] text-zinc-400">Admin Console</p>
           </div>
-          <div className="flex items-center gap-2">
+        </div>
+
+        <nav aria-label="Admin sections" role="tablist" className="flex-1 p-3 space-y-1">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveTab(item.id)}
+                className={`w-full flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                  isActive
+                    ? 'bg-[#E11D2A]/12 text-white border border-[#E11D2A]/30'
+                    : 'text-zinc-400 hover:text-white hover:bg-white/[0.04] border border-transparent'
+                }`}
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <Icon
+                    className={`w-4 h-4 shrink-0 ${isActive ? 'text-[#E11D2A]' : 'text-zinc-500'}`}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate">{item.label}</span>
+                </span>
+                {typeof item.count === 'number' && (
+                  <span className="font-mono text-xs text-zinc-400 tabular-nums shrink-0">
+                    {item.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="p-4 border-t border-white/[0.07] space-y-3">
+          {adminEmail && (
+            <div className="px-1">
+              <p className="text-[11px] text-zinc-500">Signed in as</p>
+              <p className="text-xs font-medium text-zinc-200 truncate">{adminEmail}</p>
+            </div>
+          )}
+          <div className="space-y-1.5">
             <button
               type="button"
               onClick={() => void onPublishAndView()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-zinc-700 hover:border-white text-xs font-medium text-zinc-200 hover:text-white transition-colors cursor-pointer"
+              className="w-full inline-flex items-center justify-between px-3 py-2 rounded-lg border border-white/[0.08] hover:border-white/25 text-xs font-medium text-zinc-200 hover:text-white transition-colors cursor-pointer"
             >
-              <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
               <span>View Showroom</span>
+              <ExternalLink className="w-3.5 h-3.5 text-zinc-400" aria-hidden="true" />
             </button>
             {onSignOut && (
               <button
                 type="button"
                 onClick={onSignOut}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-zinc-800 hover:border-red-700 text-xs font-medium text-zinc-300 hover:text-red-300 transition-colors cursor-pointer"
+                className="w-full inline-flex items-center justify-between px-3 py-2 rounded-lg border border-transparent hover:bg-red-950/30 hover:border-red-900/50 text-xs font-medium text-zinc-400 hover:text-red-300 transition-colors cursor-pointer"
               >
-                <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Sign Out</span>
+                <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             )}
           </div>
         </div>
-        {(uploadNotice || (saveState === 'error' && saveError)) && (
-          <div
-            role={uploadNotice?.type === 'error' || saveState === 'error' ? 'alert' : 'status'}
-            className={`px-4 py-2.5 rounded-xl border text-xs font-medium flex flex-wrap items-center justify-between gap-3 ${
-              uploadNotice?.type === 'error' || saveState === 'error'
-                ? 'bg-[#201113] border-red-900 text-red-300'
-                : 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
-            }`}
-          >
-            <span>{uploadNotice?.message || saveError}</span>
-            <div className="flex items-center gap-3">
-              {uploadNotice?.type === 'success' && (
-                <button
-                  type="button"
-                  onClick={() => void onPublishAndView(uploadNotice.sectionId)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold underline hover:text-white cursor-pointer"
-                >
-                  <span>View on Visitors Dashboard</span>
-                  <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                </button>
-              )}
+      </aside>
+
+      {/* Main Content Shell */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Mobile Top Navigation (< lg) */}
+        <header className="lg:hidden sticky top-0 z-30 bg-[#0d0d11]/95 backdrop-blur-md border-b border-white/[0.08]">
+          <div className="px-4 py-2.5 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <img
+                src={logoSrc}
+                alt={store.branding.companyName}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
+                    e.currentTarget.src = ALIF_DEFAULT_LOGO;
+                  }
+                }}
+                className="w-7 h-7 rounded-full object-cover bg-white shrink-0"
+              />
+              <span className="font-display text-sm font-semibold text-white truncate">
+                Alif <span className="text-[#E11D2A]">Car</span> Admin
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
-                onClick={() => setUploadNotice(null)}
-                className="text-xs underline opacity-80 hover:opacity-100 cursor-pointer"
+                onClick={() => void onPublishAndView()}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-white/[0.1] text-xs font-medium text-zinc-200 hover:text-white cursor-pointer whitespace-nowrap"
               >
-                Dismiss
+                <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Showroom</span>
               </button>
+              {onSignOut && (
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  aria-label="Sign Out"
+                  className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-white/[0.08] text-zinc-400 hover:text-red-300 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              )}
             </div>
           </div>
-        )}
 
-        {/* Summary KPI Strip */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-[#141418] border border-zinc-800 rounded-xl p-4">
-            <span className="block text-xs text-zinc-400">Total Inventory</span>
-            <span className="mt-1 block font-mono text-2xl font-semibold text-white tabular-nums">
-              {store.vehicles.length}
-            </span>
+          <div
+            role="tablist"
+            aria-label="Admin sections"
+            className="px-4 pb-2.5 flex items-center gap-1.5 overflow-x-auto"
+          >
+            {navItems.map((item) => {
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setActiveTab(item.id)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    isActive
+                      ? 'bg-[#E11D2A] text-white'
+                      : 'bg-[#15151a] text-zinc-400 hover:text-white border border-white/[0.06]'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
-          <div className="bg-[#141418] border border-zinc-800 rounded-xl p-4">
-            <span className="block text-xs text-zinc-400">Available</span>
-            <span className="mt-1 block font-mono text-2xl font-semibold text-emerald-400 tabular-nums">
-              {availableCount}
-            </span>
-          </div>
-          <div className="bg-[#141418] border border-zinc-800 rounded-xl p-4">
-            <span className="block text-xs text-zinc-400">Reserved</span>
-            <span className="mt-1 block font-mono text-2xl font-semibold text-amber-400 tabular-nums">
-              {reservedCount}
-            </span>
-          </div>
-          <div className="bg-[#141418] border border-zinc-800 rounded-xl p-4">
-            <span className="block text-xs text-zinc-400">Sold</span>
-            <span className="mt-1 block font-mono text-2xl font-semibold text-zinc-400 tabular-nums">
-              {soldCount}
-            </span>
-          </div>
-        </div>
+        </header>
 
-        {/* Navigation Tabs */}
-        <div
-          role="tablist"
-          aria-label="Admin sections"
-          className="flex flex-wrap items-center gap-1 p-1 bg-[#141418] border border-zinc-800 rounded-xl w-fit"
-        >
-          {(
-            [
-              { id: 'inventory', label: 'Inventory Manager' },
-              { id: 'tiktok', label: 'TikTok Video Links' },
-              { id: 'contact', label: 'Location & Contact' },
-            ] as const
-          ).map((tab) => (
+        {/* Desktop Workspace Top Bar */}
+        <header className="hidden lg:flex items-center justify-between gap-8 px-8 py-4 border-b border-white/[0.07] bg-[#0a0a0d]/85 backdrop-blur-md sticky top-0 z-20">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs text-zinc-400">
+              <span>{store.branding.companyName}</span>
+              <span aria-hidden="true">/</span>
+              <span className="text-zinc-200 font-medium">{activeNav.label}</span>
+              {saveState === 'saving' && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="text-amber-300">Saving changes...</span>
+                </>
+              )}
+              {saveState === 'saved' && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="text-emerald-400">All changes published</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
             <button
-              key={tab.id}
               type="button"
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-4 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                activeTab === tab.id
-                  ? 'bg-[#D92027] text-white shadow-sm'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
+              onClick={() => void onPublishAndView()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-white/[0.1] hover:border-white/30 text-xs font-medium text-zinc-200 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              {tab.label}
+              <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>View Showroom</span>
             </button>
-          ))}
-        </div>
 
-        {/* TAB 1: INVENTORY MANAGER */}
-        {activeTab === 'inventory' && (
-          <section className="bg-[#141418] border border-zinc-800 rounded-xl overflow-hidden">
-            <div className="p-4 sm:p-5 border-b border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-3 flex-1">
-                <div className="relative w-full sm:w-72">
-                  <Search
-                    className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                    aria-hidden="true"
-                  />
-                  <input
-                    type="search"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Filter inventory..."
-                    aria-label="Filter admin inventory"
-                    className="w-full h-10 pl-9 pr-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#D92027]"
-                  />
-                </div>
-
-                <div className="flex items-center gap-1 p-1 bg-[#1c1c21] border border-zinc-800 rounded-lg">
-                  {(['all', 'available', 'reserved', 'sold'] as const).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => setStatusFilter(st)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-md capitalize cursor-pointer transition-colors ${
-                        statusFilter === st
-                          ? 'bg-[#D92027] text-white shadow-sm'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      {st}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
+            {activeTab === 'inventory' && (
               <button
                 type="button"
                 onClick={() => {
                   setEditingVehicle(null);
                   setFormOpen(true);
                 }}
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#D92027] hover:bg-[#B91C1C] text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Plus className="w-4 h-4" aria-hidden="true" />
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Add Vehicle</span>
               </button>
-            </div>
-
-            {filteredInventory.length === 0 ? (
-              <div className="p-10 text-center space-y-3">
-                <p className="text-sm text-zinc-400">No vehicles match this filter.</p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingVehicle(null);
-                    setFormOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#D92027] text-white text-xs font-medium rounded-lg cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Add First Vehicle
-                </button>
-              </div>
-            ) : (
-              <div className="divide-y divide-zinc-800">
-                {filteredInventory.map((vehicle) => (
-                  <div
-                    key={vehicle.id}
-                    className="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-[#19191f] transition-colors"
-                  >
-                    <div className="flex items-start sm:items-center gap-4 min-w-0">
-                      <img
-                        src={vehicle.imageUrl}
-                        alt={vehicle.title}
-                        referrerPolicy="no-referrer"
-                        className="w-24 h-18 rounded-lg object-cover border border-zinc-800 bg-zinc-900 shrink-0"
-                      />
-                      <div className="min-w-0 space-y-1">
-                        <h3 className="font-display text-base font-semibold text-white truncate">
-                          {vehicle.title}
-                        </h3>
-                        <p className="text-xs text-zinc-400 tabular-nums">
-                          {vehicle.make} · {vehicle.model} · {vehicle.year} · {vehicle.mileage}
-                        </p>
-                        <p className="text-xs text-zinc-400 line-clamp-1 max-w-xl">
-                          {vehicle.description}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Quick inline controls */}
-                    <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                      <label className="inline-flex items-center gap-1.5 h-9 px-3 border border-zinc-700 hover:border-white bg-[#1c1c21] text-zinc-200 text-xs font-medium rounded-lg cursor-pointer transition-colors">
-                        <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>Photo</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) =>
-                            handleUploadImageForField(
-                              e,
-                              (url) => handleQuickVehiclePhoto(vehicle.id, url),
-                              `${vehicle.title} photo`
-                            )
-                          }
-                          className="sr-only"
-                        />
-                      </label>
-
-                      <button
-                        type="button"
-                        onClick={() => handleQuickToggleFeatured(vehicle.id)}
-                        aria-pressed={vehicle.featured}
-                        aria-label={`${vehicle.featured ? 'Unfeature' : 'Feature'} ${vehicle.title}`}
-                        className={`inline-flex items-center gap-1 h-9 px-3 border text-xs font-medium rounded-lg cursor-pointer transition-colors ${
-                          vehicle.featured
-                            ? 'border-amber-500/60 bg-amber-500/10 text-amber-300 hover:border-amber-400'
-                            : 'border-zinc-700 bg-[#1c1c21] text-zinc-400 hover:border-white hover:text-white'
-                        }`}
-                      >
-                        <Star
-                          className={`w-3.5 h-3.5 ${vehicle.featured ? 'fill-amber-400 text-amber-400' : ''}`}
-                          aria-hidden="true"
-                        />
-                        <span>{vehicle.featured ? 'Featured' : 'Feature'}</span>
-                      </button>
-
-                      <div className="flex items-center gap-1.5">
-                        <label
-                          htmlFor={`quick-price-${vehicle.id}`}
-                          className="text-xs text-zinc-400"
-                        >
-                          $
-                        </label>
-                        <input
-                          id={`quick-price-${vehicle.id}`}
-                          type="number"
-                          aria-label={`Quick price for ${vehicle.title}`}
-                          value={vehicle.price}
-                          onChange={(e) => handleQuickPriceChange(vehicle.id, e.target.value)}
-                          className="w-28 h-9 px-2.5 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm font-mono font-medium text-white tabular-nums focus:outline-none focus:border-[#D92027]"
-                        />
-                      </div>
-
-                      <select
-                        aria-label={`Availability status for ${vehicle.title}`}
-                        value={vehicle.status}
-                        onChange={(e) =>
-                          handleQuickStatusChange(vehicle.id, e.target.value as VehicleStatus)
-                        }
-                        className="h-9 px-2.5 bg-[#1c1c21] border border-zinc-700 rounded-lg text-xs font-medium text-zinc-200 cursor-pointer focus:outline-none focus:border-[#D92027]"
-                      >
-                        <option value="available">Available</option>
-                        <option value="reserved">Reserved</option>
-                        <option value="sold">Sold</option>
-                      </select>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingVehicle(vehicle);
-                          setFormOpen(true);
-                        }}
-                        aria-label={`Edit ${vehicle.title}`}
-                        className="inline-flex items-center gap-1.5 h-9 px-3 border border-zinc-700 hover:border-white bg-[#1c1c21] text-zinc-200 text-xs font-medium rounded-lg cursor-pointer transition-colors"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>Edit</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDuplicateVehicle(vehicle)}
-                        aria-label={`Duplicate ${vehicle.title}`}
-                        title="Duplicate listing"
-                        className="inline-flex items-center justify-center w-9 h-9 border border-zinc-700 hover:border-white bg-[#1c1c21] text-zinc-300 rounded-lg cursor-pointer transition-colors"
-                      >
-                        <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
-
-                      {confirmDeleteId === vehicle.id ? (
-                        <div className="flex items-center gap-1.5 bg-[#201113] px-2.5 py-1.5 rounded-lg border border-red-900">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteVehicle(vehicle.id)}
-                            className="text-xs font-semibold text-[#D92027] hover:underline cursor-pointer"
-                          >
-                            Delete
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="text-xs text-zinc-400 hover:underline cursor-pointer"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteId(vehicle.id)}
-                          aria-label={`Delete ${vehicle.title}`}
-                          title="Delete listing"
-                          className="inline-flex items-center justify-center w-9 h-9 border border-zinc-700 hover:border-red-500 hover:text-[#D92027] bg-[#1c1c21] text-zinc-400 rounded-lg cursor-pointer transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
             )}
-          </section>
-        )}
 
-        {/* TAB 2: TIKTOK VIDEO LINKS */}
-        {activeTab === 'tiktok' && (
-          <section className="space-y-5">
-            <div className="flex items-center justify-start">
+            {activeTab === 'tiktok' && (
               <button
                 type="button"
                 onClick={handleAddTikTokPost}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs sm:text-sm font-semibold rounded-lg cursor-pointer transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Plus className="w-4 h-4" aria-hidden="true" />
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Add TikTok Video</span>
               </button>
-            </div>
+            )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
+            {activeTab === 'contact' && (
+              <button
+                type="button"
+                onClick={() =>
+                  void handlePublishSection('Location & contact details', 'location-contact')
+                }
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Publish Changes</span>
+              </button>
+            )}
+          </div>
+        </header>
+
+        <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
+          {(uploadNotice || (saveState === 'error' && saveError)) && (
+            <div
+              role={uploadNotice?.type === 'error' || saveState === 'error' ? 'alert' : 'status'}
+              className={`px-4 py-3 rounded-xl border text-xs font-medium flex flex-wrap items-center justify-between gap-3 ${
+                uploadNotice?.type === 'error' || saveState === 'error'
+                  ? 'bg-[#201113] border-red-900/70 text-red-300'
+                  : 'bg-emerald-950/40 border-emerald-800/70 text-emerald-300'
+              }`}
+            >
+              <span>{uploadNotice?.message || saveError}</span>
+              <div className="flex items-center gap-3">
+                {uploadNotice?.type === 'success' && (
+                  <button
+                    type="button"
+                    onClick={() => void onPublishAndView(uploadNotice.sectionId)}
+                    className="inline-flex items-center gap-1 text-xs font-semibold underline hover:text-white cursor-pointer"
+                  >
+                    <span>View on Visitors Dashboard</span>
+                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setUploadNotice(null)}
+                  className="text-xs underline opacity-80 hover:opacity-100 cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Single-Elevation Summary KPI Strip */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#111115] border border-white/[0.08] rounded-2xl divide-y sm:divide-y-0 sm:divide-x divide-white/[0.06] overflow-hidden">
+            <div className="p-4 sm:p-5">
+              <span className="block text-xs text-zinc-400">Total Fleet</span>
+              <span className="mt-1.5 block font-mono text-2xl font-semibold text-white tabular-nums">
+                {store.vehicles.length}
+              </span>
+              <span className="mt-1 block text-xs text-zinc-500 tabular-nums">
+                {featuredCount} featured · ${totalCatalogValue.toLocaleString()} total
+              </span>
+            </div>
+            <div className="p-4 sm:p-5">
+              <span className="block text-xs text-zinc-400">Available</span>
+              <span className="mt-1.5 block font-mono text-2xl font-semibold text-emerald-400 tabular-nums">
+                {availableCount}
+              </span>
+              <span className="mt-1 block text-xs text-zinc-500">Ready on showroom floor</span>
+            </div>
+            <div className="p-4 sm:p-5">
+              <span className="block text-xs text-zinc-400">Reserved</span>
+              <span className="mt-1.5 block font-mono text-2xl font-semibold text-amber-400 tabular-nums">
+                {reservedCount}
+              </span>
+              <span className="mt-1 block text-xs text-zinc-500">Held for buyers</span>
+            </div>
+            <div className="p-4 sm:p-5">
+              <span className="block text-xs text-zinc-400">Sold</span>
+              <span className="mt-1.5 block font-mono text-2xl font-semibold text-zinc-300 tabular-nums">
+                {soldCount}
+              </span>
+              <span className="mt-1 block text-xs text-zinc-500">Completed deliveries</span>
+            </div>
+          </div>
+
+          {/* TAB 1: INVENTORY MANAGER */}
+          {activeTab === 'inventory' && (
+            <section className="bg-[#111115] border border-white/[0.08] rounded-2xl overflow-hidden">
+              <div className="p-4 sm:p-5 border-b border-white/[0.07] space-y-3">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2.5 flex-1">
+                    <div className="relative w-full sm:w-64">
+                      <Search
+                        className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                        aria-hidden="true"
+                      />
+                      <input
+                        type="search"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search make, model, year..."
+                        aria-label="Filter admin inventory"
+                        className="w-full h-10 pl-9 pr-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A]"
+                      />
+                    </div>
+
+                    <select
+                      aria-label="Filter by make"
+                      value={makeFilter}
+                      onChange={(e) => setMakeFilter(e.target.value)}
+                      className="h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-xs font-medium text-zinc-200 cursor-pointer focus:outline-none focus:border-[#E11D2A]"
+                    >
+                      <option value="">All Makes</option>
+                      {availableMakes.map((make) => (
+                        <option key={make} value={make}>
+                          {make}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      aria-label="Sort inventory"
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value as InventorySort)}
+                      className="h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-xs font-medium text-zinc-200 cursor-pointer focus:outline-none focus:border-[#E11D2A]"
+                    >
+                      <option value="newest">Sort: Default Order</option>
+                      <option value="year-desc">Sort: Year (Newest)</option>
+                      <option value="price-desc">Sort: Price (High–Low)</option>
+                      <option value="price-asc">Sort: Price (Low–High)</option>
+                    </select>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2.5">
+                    <div className="flex items-center gap-1 p-1 bg-[#09090c] border border-white/[0.08] rounded-lg">
+                      {(['all', 'available', 'reserved', 'sold'] as const).map((st) => (
+                        <button
+                          key={st}
+                          type="button"
+                          onClick={() => setStatusFilter(st)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-md capitalize cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+                            statusFilter === st
+                              ? 'bg-[#E11D2A] text-white'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          {st}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingVehicle(null);
+                        setFormOpen(true);
+                      }}
+                      className="lg:hidden inline-flex items-center justify-center gap-1.5 h-10 px-4 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" aria-hidden="true" />
+                      <span>Add Vehicle</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-zinc-400">
+                  <span className="tabular-nums">
+                    Showing <strong className="text-zinc-200">{filteredInventory.length}</strong> of{' '}
+                    {store.vehicles.length} vehicles
+                  </span>
+                  {(searchQuery || makeFilter || statusFilter !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setMakeFilter('');
+                        setStatusFilter('all');
+                      }}
+                      className="text-xs font-medium text-zinc-300 hover:text-white underline cursor-pointer"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {filteredInventory.length === 0 ? (
+                <div className="p-12 text-center space-y-3">
+                  <p className="text-sm text-zinc-400">No vehicles match your current filters.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingVehicle(null);
+                      setFormOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-lg cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Add Vehicle</span>
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Desktop High-Density Table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/[0.07] text-[11px] font-medium uppercase tracking-wider text-zinc-400 bg-[#0d0d11]/70">
+                          <th scope="col" className="py-3 pl-5 pr-3">
+                            Vehicle
+                          </th>
+                          <th scope="col" className="py-3 px-3">
+                            Origin &amp; Powertrain
+                          </th>
+                          <th scope="col" className="py-3 px-3 text-right">
+                            Price (USD)
+                          </th>
+                          <th scope="col" className="py-3 px-3">
+                            Status
+                          </th>
+                          <th scope="col" className="py-3 px-3 text-center">
+                            Featured
+                          </th>
+                          <th scope="col" className="py-3 pl-3 pr-5 text-right">
+                            Actions
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/[0.06]">
+                        {filteredInventory.map((vehicle) => (
+                          <tr
+                            key={vehicle.id}
+                            className="hover:bg-white/[0.025] transition-colors"
+                          >
+                            <td className="py-3 pl-5 pr-3">
+                              <div className="flex items-center gap-3.5 min-w-0">
+                                <img
+                                  src={vehicle.imageUrl}
+                                  alt={vehicle.title}
+                                  referrerPolicy="no-referrer"
+                                  className="w-16 h-11 rounded-lg object-cover border border-white/[0.08] bg-zinc-900 shrink-0"
+                                />
+                                <div className="min-w-0 max-w-xs">
+                                  <h3 className="font-display text-sm font-semibold text-white truncate">
+                                    {vehicle.title}
+                                  </h3>
+                                  <p className="text-xs text-zinc-400 tabular-nums truncate">
+                                    {vehicle.make} · {vehicle.model} · {vehicle.year} ·{' '}
+                                    {vehicle.mileage}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+
+                            <td className="py-3 px-3 text-xs text-zinc-400 whitespace-nowrap">
+                              <span className="block text-zinc-200">{vehicle.origin}</span>
+                              <span className="text-zinc-500">
+                                {vehicle.fuelType} · {vehicle.transmission}
+                              </span>
+                            </td>
+
+                            <td className="py-3 px-3 text-right">
+                              <div className="inline-flex items-center justify-end gap-1">
+                                <label
+                                  htmlFor={`quick-price-${vehicle.id}`}
+                                  className="text-xs text-zinc-500"
+                                >
+                                  $
+                                </label>
+                                <input
+                                  id={`quick-price-${vehicle.id}`}
+                                  type="number"
+                                  aria-label={`Quick price for ${vehicle.title}`}
+                                  value={vehicle.price}
+                                  onChange={(e) =>
+                                    handleQuickPriceChange(vehicle.id, e.target.value)
+                                  }
+                                  className="w-24 h-8 px-2 text-right bg-[#09090c] border border-white/[0.1] rounded-lg text-xs font-mono font-medium text-white tabular-nums focus:outline-none focus:border-[#E11D2A]"
+                                />
+                              </div>
+                            </td>
+
+                            <td className="py-3 px-3">
+                              <select
+                                aria-label={`Availability status for ${vehicle.title}`}
+                                value={vehicle.status}
+                                onChange={(e) =>
+                                  handleQuickStatusChange(
+                                    vehicle.id,
+                                    e.target.value as VehicleStatus
+                                  )
+                                }
+                                className={`h-8 px-2.5 bg-[#09090c] border border-white/[0.1] rounded-lg text-xs font-medium cursor-pointer focus:outline-none focus:border-[#E11D2A] ${
+                                  vehicle.status === 'available'
+                                    ? 'text-emerald-400'
+                                    : vehicle.status === 'reserved'
+                                    ? 'text-amber-400'
+                                    : 'text-zinc-400'
+                                }`}
+                              >
+                                <option value="available">Available</option>
+                                <option value="reserved">Reserved</option>
+                                <option value="sold">Sold</option>
+                              </select>
+                            </td>
+
+                            <td className="py-3 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleQuickToggleFeatured(vehicle.id)}
+                                aria-pressed={vehicle.featured}
+                                aria-label={`${vehicle.featured ? 'Unfeature' : 'Feature'} ${vehicle.title}`}
+                                title={vehicle.featured ? 'Remove from featured' : 'Mark as featured'}
+                                className={`inline-flex items-center justify-center w-8 h-8 rounded-lg border transition-colors cursor-pointer ${
+                                  vehicle.featured
+                                    ? 'border-amber-500/50 bg-amber-500/10 text-amber-400'
+                                    : 'border-white/[0.08] bg-[#09090c] text-zinc-500 hover:text-white hover:border-white/25'
+                                }`}
+                              >
+                                <Star
+                                  className={`w-3.5 h-3.5 ${vehicle.featured ? 'fill-amber-400' : ''}`}
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            </td>
+
+                            <td className="py-3 pl-3 pr-5 text-right">
+                              <div className="inline-flex items-center justify-end gap-1.5">
+                                <label
+                                  title="Upload vehicle photo"
+                                  className="inline-flex items-center gap-1 h-8 px-2.5 border border-white/[0.1] hover:border-white/30 bg-[#09090c] text-zinc-200 text-xs font-medium rounded-lg cursor-pointer transition-colors"
+                                >
+                                  <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                                  <span>Photo</span>
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(e) =>
+                                      handleUploadImageForField(
+                                        e,
+                                        (url) => handleQuickVehiclePhoto(vehicle.id, url),
+                                        `${vehicle.title} photo`
+                                      )
+                                    }
+                                    className="sr-only"
+                                  />
+                                </label>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingVehicle(vehicle);
+                                    setFormOpen(true);
+                                  }}
+                                  aria-label={`Edit ${vehicle.title}`}
+                                  className="inline-flex items-center gap-1 h-8 px-2.5 border border-white/[0.1] hover:border-white/30 bg-[#09090c] text-zinc-200 text-xs font-medium rounded-lg cursor-pointer transition-colors"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                                  <span>Edit</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDuplicateVehicle(vehicle)}
+                                  aria-label={`Duplicate ${vehicle.title}`}
+                                  title="Duplicate listing"
+                                  className="inline-flex items-center justify-center w-8 h-8 border border-white/[0.1] hover:border-white/30 bg-[#09090c] text-zinc-300 rounded-lg cursor-pointer transition-colors"
+                                >
+                                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                                </button>
+
+                                {confirmDeleteId === vehicle.id ? (
+                                  <div className="flex items-center gap-1.5 bg-[#201113] px-2.5 h-8 rounded-lg border border-red-900/70">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteVehicle(vehicle.id)}
+                                      className="text-xs font-semibold text-[#E11D2A] hover:underline cursor-pointer"
+                                    >
+                                      Delete
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteId(null)}
+                                      className="text-xs text-zinc-400 hover:underline cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteId(vehicle.id)}
+                                    aria-label={`Delete ${vehicle.title}`}
+                                    title="Delete listing"
+                                    className="inline-flex items-center justify-center w-8 h-8 border border-white/[0.1] hover:border-red-500/70 hover:text-[#E11D2A] bg-[#09090c] text-zinc-400 rounded-lg cursor-pointer transition-colors"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Compact Rows */}
+                  <div className="md:hidden divide-y divide-white/[0.07]">
+                    {filteredInventory.map((vehicle) => (
+                      <div key={vehicle.id} className="p-4 space-y-3">
+                        <div className="flex items-start gap-3">
+                          <img
+                            src={vehicle.imageUrl}
+                            alt={vehicle.title}
+                            referrerPolicy="no-referrer"
+                            className="w-20 h-14 rounded-lg object-cover border border-white/[0.08] bg-zinc-900 shrink-0"
+                          />
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <h3 className="font-display text-sm font-semibold text-white truncate">
+                              {vehicle.title}
+                            </h3>
+                            <p className="text-xs text-zinc-400 tabular-nums">
+                              {vehicle.make} · {vehicle.year} · {vehicle.mileage}
+                            </p>
+                            <p className="text-[11px] text-zinc-500 truncate">{vehicle.origin}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleQuickToggleFeatured(vehicle.id)}
+                            aria-pressed={vehicle.featured}
+                            aria-label={`${vehicle.featured ? 'Unfeature' : 'Feature'} ${vehicle.title}`}
+                            className={`inline-flex items-center justify-center w-9 h-9 rounded-lg border shrink-0 cursor-pointer ${
+                              vehicle.featured
+                                ? 'border-amber-500/50 bg-amber-500/10 text-amber-400'
+                                : 'border-white/[0.08] bg-[#09090c] text-zinc-500'
+                            }`}
+                          >
+                            <Star
+                              className={`w-4 h-4 ${vehicle.featured ? 'fill-amber-400' : ''}`}
+                              aria-hidden="true"
+                            />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">
+                              $
+                            </span>
+                            <input
+                              id={`mobile-quick-price-${vehicle.id}`}
+                              type="number"
+                              aria-label={`Quick price for ${vehicle.title}`}
+                              value={vehicle.price}
+                              onChange={(e) => handleQuickPriceChange(vehicle.id, e.target.value)}
+                              className="w-full h-10 pl-6 pr-2.5 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm font-mono text-white tabular-nums focus:outline-none focus:border-[#E11D2A]"
+                            />
+                          </div>
+
+                          <select
+                            aria-label={`Availability status for ${vehicle.title}`}
+                            value={vehicle.status}
+                            onChange={(e) =>
+                              handleQuickStatusChange(vehicle.id, e.target.value as VehicleStatus)
+                            }
+                            className="w-full h-10 px-2.5 bg-[#09090c] border border-white/[0.1] rounded-lg text-xs font-medium text-zinc-200 cursor-pointer focus:outline-none focus:border-[#E11D2A]"
+                          >
+                            <option value="available">Available</option>
+                            <option value="reserved">Reserved</option>
+                            <option value="sold">Sold</option>
+                          </select>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="inline-flex items-center justify-center gap-1.5 h-10 px-3 border border-white/[0.1] bg-[#09090c] text-zinc-200 text-xs font-medium rounded-lg cursor-pointer">
+                            <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Photo</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) =>
+                                handleUploadImageForField(
+                                  e,
+                                  (url) => handleQuickVehiclePhoto(vehicle.id, url),
+                                  `${vehicle.title} photo`
+                                )
+                              }
+                              className="sr-only"
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingVehicle(vehicle);
+                              setFormOpen(true);
+                            }}
+                            className="inline-flex items-center justify-center gap-1.5 h-10 px-3 border border-white/[0.1] bg-[#09090c] text-zinc-200 text-xs font-medium rounded-lg cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Edit</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDuplicateVehicle(vehicle)}
+                            aria-label={`Duplicate ${vehicle.title}`}
+                            className="inline-flex items-center justify-center w-10 h-10 border border-white/[0.1] bg-[#09090c] text-zinc-300 rounded-lg cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+
+                          {confirmDeleteId === vehicle.id ? (
+                            <div className="ml-auto flex items-center gap-2 bg-[#201113] px-3 h-10 rounded-lg border border-red-900/70">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteVehicle(vehicle.id)}
+                                className="text-xs font-semibold text-[#E11D2A]"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="text-xs text-zinc-400"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(vehicle.id)}
+                              aria-label={`Delete ${vehicle.title}`}
+                              className="ml-auto inline-flex items-center justify-center w-10 h-10 border border-white/[0.1] bg-[#09090c] text-zinc-400 hover:text-[#E11D2A] rounded-lg cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
+
+          {/* TAB 2: TIKTOK VIDEO LINKS */}
+          {activeTab === 'tiktok' && (
+            <section className="space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-[#111115] border border-white/[0.08] rounded-2xl p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAddTikTokPost}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-lg cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Plus className="w-4 h-4" aria-hidden="true" />
+                    <span>Add TikTok Video</span>
+                  </button>
+
+                  {store.tiktok.posts.some((p) => isTikTokVideoUrl(p.tiktokUrl)) && (
+                    <button
+                      type="button"
+                      disabled={syncingAllTikTok}
+                      onClick={handleSyncAllTikTok}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-white/[0.1] hover:border-white/30 bg-[#09090c] text-zinc-200 hover:text-white text-xs font-medium rounded-lg cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+                    >
+                      {syncingAllTikTok ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                      )}
+                      <span>{syncingAllTikTok ? 'Syncing...' : 'Sync All Videos'}</span>
+                    </button>
+                  )}
+
+                  {store.tiktok.posts.some((p) => !isTikTokVideoUrl(p.tiktokUrl)) && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void onUpdateStore(
+                          (prev) => ({
+                            ...prev,
+                            tiktok: {
+                              ...prev.tiktok,
+                              posts: prev.tiktok.posts.filter((p) =>
+                                isTikTokVideoUrl(p.tiktokUrl)
+                              ),
+                            },
+                          }),
+                          true
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-white/[0.1] hover:border-red-500/60 bg-[#09090c] text-zinc-300 hover:text-[#E11D2A] text-xs font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Remove Unlinked</span>
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowTikTokShowcaseFeatures((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-white/[0.1] hover:border-white/30 bg-[#09090c] text-zinc-200 hover:text-white text-xs font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{showTikTokShowcaseFeatures ? 'Hide Settings' : 'Showcase Settings'}</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
               {store.tiktok.posts.map((post, idx) => {
                 const fetchStatus = tiktokFetchStatus[post.id];
                 const coverOptions = tiktokCoverOptions[post.id] || [];
@@ -1110,6 +1670,13 @@ export function AdminDashboard({
                           <button
                             type="button"
                             onClick={() => {
+                              const existingNormalized = normalizeTikTokUrl(post.tiktokUrl);
+                              if (existingNormalized) {
+                                setLastFetchedUrls((prev) => ({
+                                  ...prev,
+                                  [post.id]: existingNormalized,
+                                }));
+                              }
                               setTiktokPostModes((prev) => ({ ...prev, [post.id]: 'edit' }));
                               setSelectedPublishedPostId(null);
                             }}
@@ -1122,6 +1689,13 @@ export function AdminDashboard({
                           <button
                             type="button"
                             onClick={() => {
+                              const existingNormalized = normalizeTikTokUrl(post.tiktokUrl);
+                              if (existingNormalized) {
+                                setLastFetchedUrls((prev) => ({
+                                  ...prev,
+                                  [post.id]: existingNormalized,
+                                }));
+                              }
                               setTiktokPostModes((prev) => ({
                                 ...prev,
                                 [post.id]: 'change-link',
@@ -1355,7 +1929,7 @@ export function AdminDashboard({
                     </div>
 
                     <div className="flex items-start gap-3.5">
-                      <div className="w-20 sm:w-24 aspect-[9/14] shrink-0 rounded-lg overflow-hidden bg-zinc-950 border border-zinc-800">
+                      <div className="relative w-20 sm:w-24 aspect-[9/15] shrink-0 rounded-lg overflow-hidden bg-zinc-950 border border-zinc-800">
                         {post.coverImageUrl ? (
                           <img
                             src={post.coverImageUrl}
@@ -1368,6 +1942,14 @@ export function AdminDashboard({
                             <Film className="w-5 h-5" aria-hidden="true" />
                             <span className="text-[10px] leading-tight">
                               Auto cover from TikTok link
+                            </span>
+                          </div>
+                        )}
+                        {fetchStatus?.loading && (
+                          <div className="absolute inset-0 bg-black/70 backdrop-blur-[1px] flex flex-col items-center justify-center gap-1.5 text-white p-1.5 text-center">
+                            <Loader2 className="w-4 h-4 animate-spin text-[#E11D2A]" aria-hidden="true" />
+                            <span className="text-[9px] font-medium leading-tight">
+                              Loading cover...
                             </span>
                           </div>
                         )}
@@ -1788,22 +2370,22 @@ export function AdminDashboard({
           </section>
         )}
 
-        {/* TAB 4: LOCATION & CONTACT */}
+        {/* TAB 3: LOCATION & CONTACT */}
         {activeTab === 'contact' && (
           <section className="max-w-4xl">
-            <div className="bg-[#141418] border border-zinc-800 rounded-xl p-6 space-y-4">
+            <div className="bg-[#111115] border border-white/[0.08] rounded-2xl p-6 sm:p-8 space-y-5">
               <div>
                 <h2 className="font-display text-lg font-semibold text-white">
-                  Showroom Location & Contact Details
+                  Showroom Location &amp; Contact Details
                 </h2>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  All changes update the public Location & Contact section and Footer immediately.
+                <p className="text-xs text-zinc-400 mt-1">
+                  All changes update the public Location &amp; Contact section and Footer immediately.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2">
-                  <label htmlFor="loc-address" className="block text-xs font-medium text-zinc-300 mb-1">
+                  <label htmlFor="loc-address" className="block text-xs font-medium text-zinc-300 mb-1.5">
                     Street Address / Showroom
                   </label>
                   <input
@@ -1817,13 +2399,13 @@ export function AdminDashboard({
                         contact: { ...prev.contact, addressLine: val },
                       }));
                     }}
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="loc-city" className="block text-xs font-medium text-zinc-300 mb-1">
-                    City & Country
+                  <label htmlFor="loc-city" className="block text-xs font-medium text-zinc-300 mb-1.5">
+                    City &amp; Country
                   </label>
                   <input
                     id="loc-city"
@@ -1836,12 +2418,12 @@ export function AdminDashboard({
                         contact: { ...prev.contact, cityCountry: val },
                       }));
                     }}
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="loc-hours" className="block text-xs font-medium text-zinc-300 mb-1">
+                  <label htmlFor="loc-hours" className="block text-xs font-medium text-zinc-300 mb-1.5">
                     Opening Hours
                   </label>
                   <input
@@ -1855,12 +2437,12 @@ export function AdminDashboard({
                         contact: { ...prev.contact, hours: val },
                       }));
                     }}
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label htmlFor="loc-landmark" className="block text-xs font-medium text-zinc-300 mb-1">
+                  <label htmlFor="loc-landmark" className="block text-xs font-medium text-zinc-300 mb-1.5">
                     Landmark / Directions Note
                   </label>
                   <input
@@ -1874,12 +2456,12 @@ export function AdminDashboard({
                         contact: { ...prev.contact, landmarkNote: val },
                       }));
                     }}
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="loc-phone" className="block text-xs font-medium text-zinc-300 mb-1">
+                  <label htmlFor="loc-phone" className="block text-xs font-medium text-zinc-300 mb-1.5">
                     Phone Number
                   </label>
                   <input
@@ -1893,12 +2475,12 @@ export function AdminDashboard({
                         contact: { ...prev.contact, phone: val },
                       }));
                     }}
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="loc-whatsapp" className="block text-xs font-medium text-zinc-300 mb-1">
+                  <label htmlFor="loc-whatsapp" className="block text-xs font-medium text-zinc-300 mb-1.5">
                     WhatsApp Number or Link
                   </label>
                   <input
@@ -1913,12 +2495,12 @@ export function AdminDashboard({
                       }));
                     }}
                     placeholder="+251 91 100 4580 or https://wa.me/..."
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="loc-email" className="block text-xs font-medium text-zinc-300 mb-1">
+                  <label htmlFor="loc-email" className="block text-xs font-medium text-zinc-300 mb-1.5">
                     Email Address
                   </label>
                   <input
@@ -1932,12 +2514,12 @@ export function AdminDashboard({
                         contact: { ...prev.contact, email: val },
                       }));
                     }}
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="loc-maps" className="block text-xs font-medium text-zinc-300 mb-1">
+                  <label htmlFor="loc-maps" className="block text-xs font-medium text-zinc-300 mb-1.5">
                     Google Maps Link
                   </label>
                   <input
@@ -1951,14 +2533,14 @@ export function AdminDashboard({
                         contact: { ...prev.contact, mapsUrl: val },
                       }));
                     }}
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
                 {/* Social Media Accounts */}
-                <div className="sm:col-span-2 pt-3 border-t border-zinc-800 space-y-3">
+                <div className="sm:col-span-2 pt-4 border-t border-white/[0.08] space-y-3">
                   <div>
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-300">
+                    <h3 className="text-xs font-semibold text-zinc-200">
                       Social Media Accounts (Username or Link)
                     </h3>
                     <p className="text-xs text-zinc-400 mt-0.5">
@@ -1968,7 +2550,7 @@ export function AdminDashboard({
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label htmlFor="loc-telegram" className="block text-xs font-medium text-zinc-300 mb-1">
+                      <label htmlFor="loc-telegram" className="block text-xs font-medium text-zinc-300 mb-1.5">
                         Telegram Username or Link
                       </label>
                       <input
@@ -1983,12 +2565,12 @@ export function AdminDashboard({
                           }));
                         }}
                         placeholder="@alifcarimport or https://t.me/alifcarimport"
-                        className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                        className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                       />
                     </div>
 
                     <div>
-                      <label htmlFor="loc-instagram" className="block text-xs font-medium text-zinc-300 mb-1">
+                      <label htmlFor="loc-instagram" className="block text-xs font-medium text-zinc-300 mb-1.5">
                         Instagram Username or Link
                       </label>
                       <input
@@ -2003,12 +2585,12 @@ export function AdminDashboard({
                           }));
                         }}
                         placeholder="@alifcarimport or https://instagram.com/..."
-                        className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                        className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                       />
                     </div>
 
                     <div>
-                      <label htmlFor="loc-facebook" className="block text-xs font-medium text-zinc-300 mb-1">
+                      <label htmlFor="loc-facebook" className="block text-xs font-medium text-zinc-300 mb-1.5">
                         Facebook Username or Link
                       </label>
                       <input
@@ -2023,12 +2605,12 @@ export function AdminDashboard({
                           }));
                         }}
                         placeholder="AlifCarImport or https://facebook.com/..."
-                        className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                        className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                       />
                     </div>
 
                     <div>
-                      <label htmlFor="loc-x" className="block text-xs font-medium text-zinc-300 mb-1">
+                      <label htmlFor="loc-x" className="block text-xs font-medium text-zinc-300 mb-1.5">
                         X (Twitter) Username or Link
                       </label>
                       <input
@@ -2043,7 +2625,7 @@ export function AdminDashboard({
                           }));
                         }}
                         placeholder="@alifcarimport or https://x.com/..."
-                        className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                        className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                       />
                     </div>
                   </div>
@@ -2056,8 +2638,8 @@ export function AdminDashboard({
                     );
                     if (previewLinks.length === 0) return null;
                     return (
-                      <div className="p-3.5 rounded-lg bg-[#1c1c21] border border-zinc-800 space-y-2">
-                        <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-400">
+                      <div className="p-3.5 rounded-xl bg-[#09090c] border border-white/[0.08] space-y-2">
+                        <p className="text-[11px] font-medium text-zinc-400">
                           Visitor Icons Preview ({previewLinks.length})
                         </p>
                         <SocialMediaIconRow
@@ -2070,8 +2652,8 @@ export function AdminDashboard({
                   })()}
                 </div>
 
-                <div className="sm:col-span-2 pt-2 border-t border-zinc-800">
-                  <label htmlFor="admin-emails-list" className="block text-xs font-medium text-zinc-300 mb-1">
+                <div className="sm:col-span-2 pt-3 border-t border-white/[0.08]">
+                  <label htmlFor="admin-emails-list" className="block text-xs font-medium text-zinc-300 mb-1.5">
                     Authorized Admin Emails (comma-separated)
                   </label>
                   <input
@@ -2089,17 +2671,17 @@ export function AdminDashboard({
                       }));
                     }}
                     placeholder="alifcarimports@gmail.com"
-                    className="w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-[#D92027]"
+                    className="w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white focus:outline-none focus:border-[#E11D2A]"
                   />
                 </div>
 
-                <div className="sm:col-span-2 pt-2 border-t border-zinc-800 flex justify-end">
+                <div className="sm:col-span-2 pt-3 border-t border-white/[0.08] flex justify-end">
                   <button
                     type="button"
                     onClick={() =>
                       void handlePublishSection('Location & contact details', 'location-contact')
                     }
-                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs font-semibold rounded-lg cursor-pointer transition-colors"
+                    className="inline-flex items-center gap-1.5 px-5 py-2.5 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-lg cursor-pointer transition-colors"
                   >
                     <Send className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Publish Location &amp; Contact</span>
@@ -2109,6 +2691,7 @@ export function AdminDashboard({
             </div>
           </section>
         )}
+        </main>
       </div>
 
       <VehicleFormModal
@@ -2120,6 +2703,6 @@ export function AdminDashboard({
         }}
         onSave={handleSaveVehicle}
       />
-    </main>
+    </div>
   );
 }

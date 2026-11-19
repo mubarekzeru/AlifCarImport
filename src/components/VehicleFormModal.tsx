@@ -128,9 +128,9 @@ export function VehicleFormModal({
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
     setUploadError('');
-    const remainingSlots = Math.max(0, 10 - galleryImages.length);
+    const remainingSlots = Math.max(0, 20 - galleryImages.length);
     if (remainingSlots === 0) {
-      setUploadError('Maximum of 10 additional photos per vehicle reached.');
+      setUploadError('Maximum of 20 additional photos per vehicle reached.');
       e.target.value = '';
       return;
     }
@@ -141,7 +141,7 @@ export function VehicleFormModal({
         const dataUrl = await readFileAsResizedDataUrl(file, 880, 0.72, 130_000);
         uploaded.push(dataUrl);
       }
-      setGalleryImages((prev) => [...prev, ...uploaded].slice(0, 10));
+      setGalleryImages((prev) => [...prev, ...uploaded].slice(0, 20));
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Failed to load gallery photo.');
     } finally {
@@ -235,21 +235,21 @@ export function VehicleFormModal({
   };
 
   const inputClass =
-    'w-full h-10 px-3 bg-[#1c1c21] border border-zinc-700 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#D92027]';
+    'w-full h-10 px-3 bg-[#09090c] border border-white/[0.1] rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A]';
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="vehicle-form-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-3xl max-h-[92vh] overflow-y-auto bg-[#141418] border border-zinc-800 rounded-xl shadow-2xl"
+        className="w-full max-w-3xl max-h-[92vh] overflow-y-auto bg-[#111115] border border-white/[0.1] rounded-2xl shadow-[0_32px_90px_rgba(0,0,0,0.85)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-[#141418] border-b border-zinc-800">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-[#111115]/95 backdrop-blur-md border-b border-white/[0.08]">
           <h2 id="vehicle-form-title" className="font-display text-lg font-semibold text-white">
             {initialVehicle ? 'Edit Vehicle Listing' : 'Add New Imported Vehicle'}
           </h2>
@@ -257,7 +257,7 @@ export function VehicleFormModal({
             type="button"
             onClick={onClose}
             aria-label="Close vehicle form"
-            className="w-9 h-9 inline-flex items-center justify-center rounded-lg border border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-white cursor-pointer"
+            className="w-9 h-9 inline-flex items-center justify-center rounded-lg border border-white/[0.1] text-zinc-300 hover:bg-white/[0.06] hover:text-white cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -665,18 +665,18 @@ export function VehicleFormModal({
             </div>
           </div>
 
-          <div className="sticky bottom-0 z-10 -mx-6 px-6 py-4 bg-[#141418]/95 backdrop-blur-sm border-t border-zinc-800 flex items-center justify-end gap-3">
+          <div className="sticky bottom-0 z-10 -mx-6 px-6 py-4 bg-[#111115]/95 backdrop-blur-md border-t border-white/[0.08] flex items-center justify-end gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 border border-zinc-700 hover:border-white text-zinc-300 hover:text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
+              className="px-4 py-2.5 border border-white/[0.1] hover:border-white/30 text-zinc-300 hover:text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={uploading}
-              className="px-5 py-2.5 bg-[#D92027] hover:bg-[#B91C1C] disabled:opacity-60 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
+              className="px-5 py-2.5 bg-[#E11D2A] hover:bg-[#C81722] disabled:opacity-60 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
             >
               {uploading
                 ? 'Processing Photos...'

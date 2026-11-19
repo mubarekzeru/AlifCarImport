@@ -24,7 +24,11 @@ import type {
   TikTokSectionConfig,
   Vehicle,
 } from '../types/showroom';
-import { DEFAULT_ADMIN_EMAILS, resolvePublicAssetUrl } from './inventory';
+import {
+  DEFAULT_ADMIN_EMAILS,
+  mergeRemoteVehiclesWithCatalog,
+  resolvePublicAssetUrl,
+} from './inventory';
 
 const MAX_VEHICLE_DOC_BYTES = 920_000;
 
@@ -90,7 +94,7 @@ function buildVehicleDocPayload(vehicle: Vehicle) {
   const galleryImages = Array.isArray(vehicle.galleryImages)
     ? vehicle.galleryImages
         .filter((u): u is string => typeof u === 'string' && u.trim().length > 0 && u.length <= 550_000)
-        .slice(0, 10)
+        .slice(0, 20)
     : [];
 
   const yearNum = Number.isFinite(vehicle.year) ? Math.min(Math.max(Math.round(vehicle.year), 1950), 2100) : 2024;
@@ -223,6 +227,46 @@ export async function checkFirestoreHasShowroom(): Promise<boolean> {
     return snap.exists();
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, 'config/showroom');
+  }
+}
+
+export async function fetchRemoteVehicleSummariesFromFirestore(): Promise<
+  Array<{ id: string; title: string }>
+> {
+  try {
+    const snap = await getDocs(collection(db, 'vehicles'));
+    return snap.docs.map((d) => {
+      const data = d.data() as Record<string, unknown>;
+      return {
+        id: typeof data.id === 'string' && data.id.trim() ? data.id : d.id,
+        title: String(data.title ?? ''),
+      };
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, 'vehicles');
+  }
+}
+
+export async function syncCatalogVehiclesToFirestore(
+  vehicles: Vehicle[],
+  legacyDuplicateIds: string[] = []
+): Promise<void> {
+  for (const vehicle of vehicles) {
+    const { id, payload } = buildVehicleDocPayload(vehicle);
+    try {
+      await setDoc(doc(db, 'vehicles', id), payload);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `vehicles/${id}`);
+    }
+  }
+
+  for (const legacyId of legacyDuplicateIds) {
+    const safeId = sanitizeDocId(legacyId, 'veh');
+    try {
+      await deleteDoc(doc(db, 'vehicles', safeId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `vehicles/${safeId}`);
+    }
   }
 }
 
@@ -412,7 +456,7 @@ export function subscribeShowroomFromFirestore(
     const merged: ShowroomStore = {
       branding: resolvedBranding,
       hero: resolvedHero,
-      vehicles: hasConfig || vehiclesLoaded ? remoteVehicles : base.vehicles,
+      vehicles: mergeRemoteVehiclesWithCatalog(remoteVehicles, INITIAL_SHOWROOM_STORE.vehicles),
       tiktok: {
         title: configData?.tiktok?.title ?? base.tiktok.title,
         description: configData?.tiktok?.description ?? base.tiktok.description,
@@ -464,9 +508,11 @@ export function subscribeShowroomFromFirestore(
             fuelType: String(data.fuelType ?? ''),
             color: String(data.color ?? ''),
             origin: String(data.origin ?? ''),
-            imageUrl: String(data.imageUrl ?? ''),
+            imageUrl: resolvePublicAssetUrl(String(data.imageUrl ?? '')),
             galleryImages: Array.isArray(data.galleryImages)
-              ? data.galleryImages.filter((u): u is string => typeof u === 'string')
+              ? data.galleryImages
+                  .filter((u): u is string => typeof u === 'string')
+                  .map((u) => resolvePublicAssetUrl(u))
               : [],
             description: String(data.description ?? ''),
             tiktokUrl: String(data.tiktokUrl ?? ''),

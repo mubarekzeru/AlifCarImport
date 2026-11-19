@@ -65,6 +65,61 @@ export function readFileAsResizedDataUrl(
   });
 }
 
+export function compressImageUrlToDataUrl(
+  imageUrl: string,
+  maxWidth = 640,
+  maxDataUrlChars = 190_000
+): Promise<string> {
+  const trimmed = (imageUrl || '').trim();
+  if (!trimmed || typeof window === 'undefined' || typeof document === 'undefined') {
+    return Promise.resolve(trimmed);
+  }
+  if (trimmed.startsWith('data:image/') && trimmed.length <= maxDataUrlChars) {
+    return Promise.resolve(trimmed);
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    if (!trimmed.startsWith('data:') && !trimmed.startsWith('/')) {
+      img.crossOrigin = 'anonymous';
+    }
+    const timer = window.setTimeout(() => resolve(trimmed), 6000);
+    img.onerror = () => {
+      window.clearTimeout(timer);
+      resolve(trimmed);
+    };
+    img.onload = () => {
+      window.clearTimeout(timer);
+      try {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (!w || !h) {
+          resolve(trimmed);
+          return;
+        }
+        const scale = w > maxWidth ? maxWidth / w : 1;
+        const targetWidth = Math.max(1, Math.round(w * scale));
+        const targetHeight = Math.max(1, Math.round(h * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(trimmed);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+        resolve(encodeCanvasWithinBudget(canvas, false, 0.82, maxDataUrlChars));
+      } catch {
+        // Cross-origin tainted canvas — fall back to original URL
+        resolve(trimmed);
+      }
+    };
+    img.src = trimmed;
+  });
+}
+
 export interface VideoFrameCandidate {
   label: string;
   timeSeconds: number;

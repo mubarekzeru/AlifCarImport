@@ -206,7 +206,7 @@ service cloud.firestore {
         isValidString(data.imageUrl, 1, 550000) &&
         (!('galleryImages' in data) || (
           data.galleryImages is list &&
-          data.galleryImages.size() <= 10 &&
+          data.galleryImages.size() <= 20 &&
           (data.galleryImages.size() == 0 || (data.galleryImages[0] is string && data.galleryImages[0].size() <= 550000))
         )) &&
         isValidString(data.description, 1, 4000) &&

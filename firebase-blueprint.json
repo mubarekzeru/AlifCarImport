@@ -146,7 +146,7 @@
         },
         "galleryImages": {
           "type": "array",
-          "description": "Additional gallery photo URLs or compressed data URIs (max 10)."
+          "description": "Additional gallery photo URLs or compressed data URIs (max 20)."
         },
         "description": {
           "type": "string",

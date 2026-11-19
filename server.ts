@@ -258,8 +258,9 @@ async function resolveTikTokVideoMetadata(rawUrl: string): Promise<{
   }
 
   const cleanResolvedUrl = finalUrl.split('?')[0];
-  const videoIdMatch = cleanResolvedUrl.match(/\/video\/(\d+)/);
-  const videoId = videoIdMatch ? videoIdMatch[1] : null;
+  const videoIdMatch = cleanResolvedUrl.match(/\/(?:video|photo)\/(\d+)/);
+  let videoId = videoIdMatch ? videoIdMatch[1] : null;
+  let resolvedFinalUrl = cleanResolvedUrl;
   const html = await pageRes.text();
 
   let description = '';
@@ -286,12 +287,19 @@ async function resolveTikTokVideoMetadata(rawUrl: string): Promise<{
                   originCover?: string;
                   dynamicCover?: string;
                 };
+                imagePost?: {
+                  cover?: { imageURL?: { urlList?: string[] } };
+                  images?: Array<{ imageURL?: { urlList?: string[] } }>;
+                };
               };
             };
           }
         | undefined;
       const item = videoDetail?.itemInfo?.itemStruct;
       if (item) {
+        if (!videoId && item.id) {
+          videoId = item.id;
+        }
         if (typeof item.desc === 'string') {
           description = item.desc.trim();
         }
@@ -313,6 +321,96 @@ async function resolveTikTokVideoMetadata(rawUrl: string): Promise<{
             url: item.video.originCover,
           });
         }
+        const photoCover =
+          item.imagePost?.cover?.imageURL?.urlList?.[0] ||
+          item.imagePost?.images?.[0]?.imageURL?.urlList?.[0];
+        if (photoCover && !rawCovers.some((c) => c.url === photoCover)) {
+          rawCovers.push({
+            label: 'Photo Cover',
+            key: `${idSeed}-photo`,
+            url: photoCover,
+          });
+        }
+      }
+    } catch {
+      // Fall through to tikwm / oEmbed / OpenGraph fallback
+    }
+  }
+
+  // Server-side tikwm fallback if TikTok HTML did not yield a cover (e.g. bot check or short link)
+  if (!description || rawCovers.length === 0) {
+    try {
+      const twRes = await fetch(
+        `https://www.tikwm.com/api/?url=${encodeURIComponent(trimmed)}`,
+        {
+          headers: { 'User-Agent': BROWSER_USER_AGENT },
+          signal: AbortSignal.timeout(9000),
+        }
+      );
+      if (twRes.ok) {
+        const twJson = (await twRes.json()) as {
+          code?: number;
+          data?: {
+            id?: string;
+            title?: string;
+            cover?: string;
+            origin_cover?: string;
+            images?: string[];
+            author?: { unique_id?: string };
+          };
+        };
+        const item = twJson?.data;
+        if (twJson?.code === 0 && item) {
+          if (!videoId && item.id) {
+            videoId = item.id;
+          }
+          if (!authorHandle && item.author?.unique_id) {
+            authorHandle = `@${item.author.unique_id}`;
+          }
+          if (videoId && item.author?.unique_id && !resolvedFinalUrl.includes('/video/')) {
+            resolvedFinalUrl = `https://www.tiktok.com/@${item.author.unique_id}/video/${videoId}`;
+          }
+          if (!description && typeof item.title === 'string') {
+            description = item.title.trim();
+          }
+          const idSeed =
+            videoId || crypto.createHash('md5').update(cleanResolvedUrl).digest('hex').slice(0, 12);
+          if (
+            typeof item.cover === 'string' &&
+            item.cover.startsWith('http') &&
+            !rawCovers.some((c) => c.url === item.cover)
+          ) {
+            rawCovers.push({
+              label: 'Video Cover',
+              key: `${idSeed}-tw-cover`,
+              url: item.cover,
+            });
+          }
+          if (
+            typeof item.origin_cover === 'string' &&
+            item.origin_cover.startsWith('http') &&
+            item.origin_cover !== item.cover &&
+            !rawCovers.some((c) => c.url === item.origin_cover)
+          ) {
+            rawCovers.push({
+              label: 'Clean Video Frame',
+              key: `${idSeed}-tw-frame`,
+              url: item.origin_cover,
+            });
+          }
+          if (
+            Array.isArray(item.images) &&
+            typeof item.images[0] === 'string' &&
+            item.images[0].startsWith('http') &&
+            !rawCovers.some((c) => c.url === item.images![0])
+          ) {
+            rawCovers.push({
+              label: 'Photo Cover',
+              key: `${idSeed}-tw-photo`,
+              url: item.images[0],
+            });
+          }
+        }
       }
     } catch {
       // Fall through to oEmbed / OpenGraph fallback
@@ -323,7 +421,7 @@ async function resolveTikTokVideoMetadata(rawUrl: string): Promise<{
   if (!description || rawCovers.length === 0) {
     try {
       const oeRes = await fetch(
-        `https://www.tiktok.com/oembed?url=${encodeURIComponent(cleanResolvedUrl)}`,
+        `https://www.tiktok.com/oembed?url=${encodeURIComponent(resolvedFinalUrl)}`,
         {
           headers: { 'User-Agent': BROWSER_USER_AGENT },
           signal: AbortSignal.timeout(8000),
@@ -345,7 +443,7 @@ async function resolveTikTokVideoMetadata(rawUrl: string): Promise<{
         }
         if (typeof oeJson.thumbnail_url === 'string' && oeJson.thumbnail_url.startsWith('http')) {
           const idSeed =
-            videoId || crypto.createHash('md5').update(cleanResolvedUrl).digest('hex').slice(0, 12);
+            videoId || crypto.createHash('md5').update(resolvedFinalUrl).digest('hex').slice(0, 12);
           rawCovers.push({
             label: 'Video Thumbnail',
             key: `${idSeed}-oembed`,
@@ -368,7 +466,7 @@ async function resolveTikTokVideoMetadata(rawUrl: string): Promise<{
     const ogImg = extractMetaTag(html, 'og:image') || extractMetaTag(html, 'twitter:image');
     if (ogImg) {
       const idSeed =
-        videoId || crypto.createHash('md5').update(cleanResolvedUrl).digest('hex').slice(0, 12);
+        videoId || crypto.createHash('md5').update(resolvedFinalUrl).digest('hex').slice(0, 12);
       rawCovers.push({ label: 'Video Cover', key: `${idSeed}-og`, url: ogImg });
     }
   }
@@ -385,7 +483,7 @@ async function resolveTikTokVideoMetadata(rawUrl: string): Promise<{
   const suggestedTitle = deriveTitleFromVideoDescription(description);
 
   return {
-    resolvedUrl: cleanResolvedUrl,
+    resolvedUrl: resolvedFinalUrl,
     videoId,
     description,
     suggestedTitle,
