@@ -1,7 +1,12 @@
-import { Cog, Fuel, Gauge } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Car, Cog, Fuel, Gauge } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { Vehicle } from '../types/showroom';
-import { formatPrice, formatVehicleTileModel, resolvePublicAssetUrl } from '../utils/inventory';
+import {
+  formatPrice,
+  formatVehicleTileModel,
+  getPublicAssetFallbackUrls,
+} from '../utils/inventory';
 
 interface VehicleCardProps {
   vehicle: Vehicle;
@@ -14,6 +19,18 @@ export function VehicleCard({ vehicle, index = 0, onSelect }: VehicleCardProps) 
   const modelDisplay = formatVehicleTileModel(vehicle);
   const staggerIndex = typeof index === 'number' ? index : 0;
 
+  const imageCandidates = useMemo(
+    () => getPublicAssetFallbackUrls(vehicle.imageUrl),
+    [vehicle.imageUrl]
+  );
+  const [candidateIdx, setCandidateIdx] = useState(0);
+
+  useEffect(() => {
+    setCandidateIdx(0);
+  }, [vehicle.imageUrl]);
+
+  const activeImageSrc = imageCandidates[candidateIdx] ?? '';
+
   const specs = [
     vehicle.mileage?.trim() ? { key: 'mileage', value: vehicle.mileage.trim(), Icon: Gauge } : null,
     vehicle.fuelType?.trim() ? { key: 'fuel', value: vehicle.fuelType.trim(), Icon: Fuel } : null,
@@ -25,13 +42,13 @@ export function VehicleCard({ vehicle, index = 0, onSelect }: VehicleCardProps) 
   return (
     <motion.article
       data-testid={`vehicle-card-${vehicle.id}`}
-      initial={{ opacity: 0, y: 24 }}
+      initial={{ opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
       whileHover={{ y: -3, transition: { duration: 0.22, ease: [0.16, 1, 0.3, 1] } }}
-      viewport={{ once: true, amount: 0.06 }}
+      viewport={{ once: true, amount: 'some' }}
       transition={{
-        duration: 0.42,
-        delay: Math.min(staggerIndex * 0.06, 0.45),
+        duration: 0.38,
+        delay: Math.min(staggerIndex * 0.04, 0.3),
         ease: [0.22, 1, 0.36, 1],
       }}
       className="group bg-[#111115] border border-white/[0.08] hover:border-white/25 rounded-xl sm:rounded-2xl overflow-hidden transition-colors duration-300"
@@ -42,17 +59,31 @@ export function VehicleCard({ vehicle, index = 0, onSelect }: VehicleCardProps) 
         aria-label={`${vehicle.title} — ${formatPrice(vehicle.price)}`}
         className="w-full h-full flex flex-col text-left cursor-pointer"
       >
-        <div className="relative w-full aspect-[16/10] bg-zinc-950 overflow-hidden">
-          <img
-            src={resolvePublicAssetUrl(vehicle.imageUrl)}
-            alt={vehicle.title}
-            referrerPolicy="no-referrer"
-            className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04]"
-          />
+        <div className="relative w-full aspect-[16/10] shrink-0 bg-zinc-950 overflow-hidden">
+          {activeImageSrc ? (
+            <img
+              src={activeImageSrc}
+              alt={vehicle.title}
+              decoding="async"
+              referrerPolicy="no-referrer"
+              onError={() => {
+                if (candidateIdx + 1 < imageCandidates.length) {
+                  setCandidateIdx((prev) => prev + 1);
+                } else {
+                  setCandidateIdx(imageCandidates.length);
+                }
+              }}
+              className="absolute inset-0 block w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04]"
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-zinc-900 text-zinc-600">
+              <Car className="w-8 h-8" aria-hidden="true" />
+            </div>
+          )}
 
           {vehicle.status !== 'available' && (
             <span
-              className={`absolute top-2 right-2 sm:top-3 sm:right-3 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md text-[9px] sm:text-[10px] font-semibold uppercase tracking-wider backdrop-blur-md ${
+              className={`absolute top-2 right-2 sm:top-3 sm:right-3 z-10 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md text-[9px] sm:text-[10px] font-semibold uppercase tracking-wider backdrop-blur-md ${
                 vehicle.status === 'reserved'
                   ? 'bg-amber-400/90 text-black'
                   : 'bg-black/80 text-zinc-200 border border-white/15'
@@ -63,7 +94,7 @@ export function VehicleCard({ vehicle, index = 0, onSelect }: VehicleCardProps) 
           )}
         </div>
 
-        <div className="p-3 sm:p-5 flex-1 flex flex-col justify-between gap-2.5 sm:gap-4">
+        <div className="p-3 sm:p-5 flex-1 flex flex-col justify-between gap-2.5 sm:gap-4 w-full">
           <div className="space-y-1 sm:space-y-1.5 min-w-0">
             <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.1em] sm:tracking-[0.14em] text-[#E11D2A] truncate">
               {vehicle.make} · {vehicle.year}

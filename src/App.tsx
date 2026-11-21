@@ -19,7 +19,7 @@ import {
   ALIF_DEFAULT_LOGO,
   INITIAL_SHOWROOM_STORE,
 } from './data/seedData';
-import { auth, formatFirestoreUserMessage } from './firebase';
+import { app, auth, formatFirestoreUserMessage } from './firebase';
 import type { ShowroomStore, Vehicle, VehicleFilters, VehicleStatus } from './types/showroom';
 import {
   fetchAdminAllowlistFromFirestore,
@@ -42,6 +42,7 @@ import {
   signInAdminWithEmailPassword,
   signInAdminWithGoogle,
 } from './utils/storeClient';
+import { startWebAdminSession, stopWebSessionWatcher } from './utils/webAdminSessionSync';
 
 const INITIAL_FILTERS: VehicleFilters = {
   query: '',
@@ -429,6 +430,7 @@ export default function App() {
         if (!active) return;
         if (allowed) {
           setAdminEmail(user.email);
+          void startWebAdminSession(auth, app, user);
           try {
             await ensureFirestoreSeeded(storeRef.current);
           } catch (err) {
@@ -436,9 +438,11 @@ export default function App() {
             setSaveError(formatFirestoreUserMessage(err));
           }
         } else {
+          stopWebSessionWatcher();
           setAdminEmail(null);
         }
       } else {
+        stopWebSessionWatcher();
         setAdminEmail(null);
       }
       setAuthReady(true);
@@ -447,6 +451,7 @@ export default function App() {
     return () => {
       active = false;
       unsubAuth();
+      stopWebSessionWatcher();
     };
   }, []);
 

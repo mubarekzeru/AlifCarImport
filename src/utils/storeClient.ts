@@ -5,7 +5,7 @@ import {
   signOut,
 } from 'firebase/auth';
 import { INITIAL_SHOWROOM_STORE } from '../data/seedData';
-import { auth, formatFirestoreUserMessage, googleProvider } from '../firebase';
+import { app, auth, formatFirestoreUserMessage, googleProvider } from '../firebase';
 import type { CustomerInquiry, ShowroomStore } from '../types/showroom';
 import {
   checkFirestoreHasShowroom,
@@ -28,6 +28,7 @@ import {
   resolveHeroVideoUrl,
   resolvePublicAssetUrl,
 } from './inventory';
+import { endWebAdminSession } from './webAdminSessionSync';
 
 function normalizeStoreAssetPaths(store: ShowroomStore): ShowroomStore {
   const normalizedVehicles = Array.isArray(store.vehicles)
@@ -229,6 +230,7 @@ export async function ensureFirestoreSeeded(seedStore: ShowroomStore): Promise<v
 }
 
 export async function logoutAdmin(): Promise<void> {
+  await endWebAdminSession(app, auth.currentUser);
   await signOut(auth).catch(() => undefined);
 }
 

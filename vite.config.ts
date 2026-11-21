@@ -4,16 +4,18 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, type Plugin } from 'vite';
 
-const DEFAULT_GITHUB_REPO = 'alif-car-import';
-
-function resolveGitHubPagesBase(): string {
+function resolveBuildBase(): string {
   if (process.env.VITE_BASE_PATH) {
     const custom = process.env.VITE_BASE_PATH.trim();
     return custom.endsWith('/') ? custom : `${custom}/`;
   }
-  const repoFromCi = process.env.GITHUB_REPOSITORY?.split('/')[1];
-  const repoName = repoFromCi || DEFAULT_GITHUB_REPO;
-  return `/${repoName}/`;
+  if (process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_REPOSITORY) {
+    const repoFromCi = process.env.GITHUB_REPOSITORY.split('/')[1];
+    if (repoFromCi) {
+      return `/${repoFromCi}/`;
+    }
+  }
+  return '/';
 }
 
 function githubPagesSpaFallbackPlugin(): Plugin {
@@ -34,7 +36,7 @@ function githubPagesSpaFallbackPlugin(): Plugin {
 }
 
 export default defineConfig(({ command }) => {
-  const base = command === 'build' ? resolveGitHubPagesBase() : '/';
+  const base = command === 'build' ? resolveBuildBase() : '/';
 
   return {
     base,

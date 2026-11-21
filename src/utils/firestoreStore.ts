@@ -28,6 +28,7 @@ import {
   DEFAULT_ADMIN_EMAILS,
   mergeRemoteVehiclesWithCatalog,
   resolvePublicAssetUrl,
+  toCanonicalPublicAssetPath,
 } from './inventory';
 
 const MAX_VEHICLE_DOC_BYTES = 920_000;
@@ -45,7 +46,7 @@ function clampStr(value: unknown, maxLen: number, fallback = ''): string {
 function buildBrandingPayload(branding: BrandingSettings) {
   return {
     companyName: clampStr(branding.companyName, 120, 'Alif Car Import') || 'Alif Car Import',
-    logoUrl: clampStr(branding.logoUrl, 550_000, ''),
+    logoUrl: clampStr(toCanonicalPublicAssetPath(branding.logoUrl), 550_000, ''),
     tagline: clampStr(branding.tagline, 240, ''),
   };
 }
@@ -55,9 +56,9 @@ function buildHeroPayload(hero: HeroPost) {
     kicker: clampStr(hero.kicker, 120, ''),
     title: clampStr(hero.title, 200, 'Alif Car Import') || 'Alif Car Import',
     description: clampStr(hero.description, 1200, ''),
-    imageUrl: clampStr(hero.imageUrl, 550_000, ''),
+    imageUrl: clampStr(toCanonicalPublicAssetPath(hero.imageUrl), 550_000, ''),
     ...(typeof hero.videoUrl === 'string' && hero.videoUrl.trim()
-      ? { videoUrl: clampStr(hero.videoUrl, 550_000, '') }
+      ? { videoUrl: clampStr(toCanonicalPublicAssetPath(hero.videoUrl), 550_000, '') }
       : {}),
     ctaLabel: clampStr(hero.ctaLabel, 80, 'Browse Inventory') || 'Browse Inventory',
   };
@@ -94,6 +95,7 @@ function buildVehicleDocPayload(vehicle: Vehicle) {
   const galleryImages = Array.isArray(vehicle.galleryImages)
     ? vehicle.galleryImages
         .filter((u): u is string => typeof u === 'string' && u.trim().length > 0 && u.length <= 550_000)
+        .map((u) => toCanonicalPublicAssetPath(u))
         .slice(0, 20)
     : [];
 
@@ -112,7 +114,7 @@ function buildVehicleDocPayload(vehicle: Vehicle) {
     fuelType: clampStr(vehicle.fuelType, 80, 'Petrol'),
     color: clampStr(vehicle.color, 80, 'White'),
     origin: clampStr(vehicle.origin, 100, 'Japan Import'),
-    imageUrl: clampStr(vehicle.imageUrl, 550_000, ''),
+    imageUrl: clampStr(toCanonicalPublicAssetPath(vehicle.imageUrl), 550_000, ''),
     galleryImages,
     description: clampStr(vehicle.description, 4000, 'Imported vehicle.') || 'Imported vehicle.',
     tiktokUrl: clampStr(vehicle.tiktokUrl, 500, ''),

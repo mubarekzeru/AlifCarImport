@@ -816,7 +816,98 @@ export function splitDisplayBrandLines(companyName: string): string[] {
   return [words.slice(0, splitIndex).join(' '), words.slice(splitIndex).join(' ')];
 }
 
-export function resolvePublicAssetUrl(rawUrl?: string, baseUrlOverride?: string): string {
+export function resolveRuntimeBaseUrl(
+  configuredBase?: string,
+  locationInfo?: { hostname: string; pathname: string }
+): string {
+  const rawBase =
+    configuredBase ??
+    (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
+      ? import.meta.env.BASE_URL
+      : '/');
+  const normalizedBase =
+    rawBase && rawBase !== './'
+      ? `${rawBase.startsWith('/') ? '' : '/'}${rawBase.endsWith('/') ? rawBase : `${rawBase}/`}`
+      : '/';
+
+  const loc =
+    locationInfo ??
+    (typeof window !== 'undefined'
+      ? { hostname: window.location.hostname || '', pathname: window.location.pathname || '/' }
+      : null);
+
+  if (!loc) {
+    return normalizedBase;
+  }
+
+  const hostname = loc.hostname.toLowerCase();
+  const pathname = loc.pathname || '/';
+
+  if (hostname.endsWith('.github.io')) {
+    const firstSegment = pathname.split('/').filter(Boolean)[0];
+    if (
+      firstSegment &&
+      firstSegment !== 'car' &&
+      firstSegment !== 'admin' &&
+      firstSegment !== 'assets'
+    ) {
+      return `/${firstSegment}/`;
+    }
+  }
+
+  if (normalizedBase !== '/') {
+    const baseNoTrailing = normalizedBase.slice(0, -1);
+    const pathMatchesBase =
+      pathname === baseNoTrailing || pathname.startsWith(normalizedBase);
+    if (!pathMatchesBase) {
+      return '/';
+    }
+  }
+
+  return normalizedBase;
+}
+
+function extractRelativePublicAssetPath(rawUrl?: string): string | null {
+  const trimmed = (rawUrl ?? '').trim();
+  if (!trimmed) return null;
+  if (
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('/src/')
+  ) {
+    return null;
+  }
+
+  if (trimmed.startsWith('assets/')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('./assets/')) {
+    return trimmed.slice(2);
+  }
+  const assetsIdx = trimmed.indexOf('/assets/');
+  if (assetsIdx !== -1) {
+    return trimmed.slice(assetsIdx + 1);
+  }
+  return null;
+}
+
+export function toCanonicalPublicAssetPath(rawUrl?: string): string {
+  const trimmed = (rawUrl ?? '').trim();
+  if (!trimmed) return '';
+  const rel = extractRelativePublicAssetPath(trimmed);
+  if (rel) {
+    return `/${rel}`;
+  }
+  return trimmed;
+}
+
+export function resolvePublicAssetUrl(
+  rawUrl?: string,
+  baseUrlOverride?: string,
+  locationInfo?: { hostname: string; pathname: string }
+): string {
   const trimmed = (rawUrl ?? '').trim();
   if (!trimmed) return '';
   if (
@@ -829,19 +920,49 @@ export function resolvePublicAssetUrl(rawUrl?: string, baseUrlOverride?: string)
   }
 
   const baseUrl =
-    baseUrlOverride ??
-    (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
-      ? import.meta.env.BASE_URL
-      : '/');
+    baseUrlOverride !== undefined
+      ? baseUrlOverride
+      : resolveRuntimeBaseUrl(undefined, locationInfo);
   const cleanBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
 
-  const assetsIdx = trimmed.indexOf('/assets/');
-  if (assetsIdx !== -1 && !trimmed.startsWith('/src/')) {
-    const relativeAssetPath = trimmed.slice(assetsIdx + 1);
-    return `${cleanBase}${relativeAssetPath}`;
+  const rel = extractRelativePublicAssetPath(trimmed);
+  if (rel) {
+    return `${cleanBase}${rel}`;
   }
 
   return trimmed;
+}
+
+export function getPublicAssetFallbackUrls(
+  rawUrl?: string,
+  baseUrlOverride?: string,
+  locationInfo?: { hostname: string; pathname: string }
+): string[] {
+  const trimmed = (rawUrl ?? '').trim();
+  if (!trimmed) return [];
+
+  const primary = resolvePublicAssetUrl(trimmed, baseUrlOverride, locationInfo);
+  const rel = extractRelativePublicAssetPath(trimmed);
+  if (!rel) {
+    return primary ? [primary] : [];
+  }
+
+  const configuredBase =
+    typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
+      ? import.meta.env.BASE_URL
+      : '/';
+  const cleanConfigured = configuredBase.endsWith('/')
+    ? configuredBase
+    : `${configuredBase}/`;
+
+  const candidates = [
+    primary,
+    `/${rel}`,
+    `${cleanConfigured}${rel}`,
+    trimmed,
+  ].filter(Boolean);
+
+  return Array.from(new Set(candidates));
 }
 
 const LEGACY_DEFAULT_HERO_VIDEO_TOKEN = 'gemini_generated_video_9a151ab3_e5ba47be';

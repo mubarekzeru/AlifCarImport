@@ -40,6 +40,7 @@ import {
   extractTikTokVideoId,
   filterVehicles,
   getConfiguredSocialLinks,
+  getPublicAssetFallbackUrls,
   isPlaceholderTikTokCover,
   isTikTokVideoUrl,
   normalizeTikTokUrl,
@@ -1210,9 +1211,19 @@ export function AdminDashboard({
                             <td className="py-3 pl-5 pr-3">
                               <div className="flex items-center gap-3.5 min-w-0">
                                 <img
-                                  src={vehicle.imageUrl}
+                                  src={resolvePublicAssetUrl(vehicle.imageUrl)}
                                   alt={vehicle.title}
+                                  decoding="async"
                                   referrerPolicy="no-referrer"
+                                  onError={(e) => {
+                                    const el = e.currentTarget;
+                                    const fallbacks = getPublicAssetFallbackUrls(vehicle.imageUrl);
+                                    const nextIdx = Number(el.dataset.fallbackIdx || '0') + 1;
+                                    if (nextIdx < fallbacks.length) {
+                                      el.dataset.fallbackIdx = String(nextIdx);
+                                      el.src = fallbacks[nextIdx];
+                                    }
+                                  }}
                                   className="w-16 h-11 rounded-lg object-cover border border-white/[0.08] bg-zinc-900 shrink-0"
                                 />
                                 <div className="min-w-0 max-w-xs">
@@ -1386,9 +1397,19 @@ export function AdminDashboard({
                       <div key={vehicle.id} className="p-4 space-y-3">
                         <div className="flex items-start gap-3">
                           <img
-                            src={vehicle.imageUrl}
+                            src={resolvePublicAssetUrl(vehicle.imageUrl)}
                             alt={vehicle.title}
+                            decoding="async"
                             referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              const el = e.currentTarget;
+                              const fallbacks = getPublicAssetFallbackUrls(vehicle.imageUrl);
+                              const nextIdx = Number(el.dataset.fallbackIdx || '0') + 1;
+                              if (nextIdx < fallbacks.length) {
+                                el.dataset.fallbackIdx = String(nextIdx);
+                                el.src = fallbacks[nextIdx];
+                              }
+                            }}
                             className="w-20 h-14 rounded-lg object-cover border border-white/[0.08] bg-zinc-900 shrink-0"
                           />
                           <div className="min-w-0 flex-1 space-y-0.5">

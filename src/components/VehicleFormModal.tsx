@@ -5,6 +5,7 @@ import { readFileAsResizedDataUrl } from '../utils/imageUpload';
 import {
   isTikTokVideoUrl,
   normalizeTikTokUrl,
+  resolvePublicAssetUrl,
   validateVehicleInput,
   type VehicleValidationErrors,
 } from '../utils/inventory';
@@ -271,7 +272,7 @@ export function VehicleFormModal({
                 {imageUrl ? (
                   <>
                     <img
-                      src={imageUrl}
+                      src={resolvePublicAssetUrl(imageUrl)}
                       alt="Vehicle preview"
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover"
@@ -341,7 +342,7 @@ export function VehicleFormModal({
                         className="relative w-16 h-12 rounded-md overflow-hidden border border-zinc-700 bg-zinc-900"
                       >
                         <img
-                          src={url}
+                          src={resolvePublicAssetUrl(url)}
                           alt={`Gallery photo ${idx + 1}`}
                           referrerPolicy="no-referrer"
                           className="w-full h-full object-cover"

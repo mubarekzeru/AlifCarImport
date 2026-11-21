@@ -23,7 +23,10 @@ import {
   getVehiclePricingBreakdown,
   getAvailableColorSwatches,
   splitDisplayBrandLines,
+  resolveRuntimeBaseUrl,
+  toCanonicalPublicAssetPath,
   resolvePublicAssetUrl,
+  getPublicAssetFallbackUrls,
   resolveHeroVideoUrl,
   isAuthorizedAdminEmail,
   needsCatalogSyncToFirestore,
@@ -612,4 +615,80 @@ test('mergeRemoteVehiclesWithCatalog merges unsynced legacy Firestore docs witho
     ['song-plus', 'byd-e2']
   );
 });
+
+test('resolveRuntimeBaseUrl adapts across root hosts, GitHub Pages subpaths, and custom domains', () => {
+  // AI Studio Shared App / Cloud Run / custom domain with misconfigured subpath build
+  assert.equal(
+    resolveRuntimeBaseUrl('/AlifCarImport/', {
+      hostname: 'ais-pre-example.europe-west2.run.app',
+      pathname: '/',
+    }),
+    '/'
+  );
+  assert.equal(
+    resolveRuntimeBaseUrl('/AlifCarImport/', {
+      hostname: 'alifcarimport.com',
+      pathname: '/car/song-plus',
+    }),
+    '/'
+  );
+
+  // GitHub Pages subpath deployment
+  assert.equal(
+    resolveRuntimeBaseUrl('/AlifCarImport/', {
+      hostname: 'mubyzeru.github.io',
+      pathname: '/AlifCarImport/',
+    }),
+    '/AlifCarImport/'
+  );
+  assert.equal(
+    resolveRuntimeBaseUrl('/', {
+      hostname: 'mubyzeru.github.io',
+      pathname: '/AlifCarImport/car/song-plus',
+    }),
+    '/AlifCarImport/'
+  );
+});
+
+test('toCanonicalPublicAssetPath strips deployment repo prefixes while keeping data and external URLs', () => {
+  assert.equal(
+    toCanonicalPublicAssetPath('/AlifCarImport/assets/alif-cars/song.jpg'),
+    '/assets/alif-cars/song.jpg'
+  );
+  assert.equal(
+    toCanonicalPublicAssetPath('assets/alif-cars/song.jpg'),
+    '/assets/alif-cars/song.jpg'
+  );
+  assert.equal(
+    toCanonicalPublicAssetPath('data:image/jpeg;base64,abc123'),
+    'data:image/jpeg;base64,abc123'
+  );
+  assert.equal(
+    toCanonicalPublicAssetPath('https://cdn.example.com/car.jpg'),
+    'https://cdn.example.com/car.jpg'
+  );
+});
+
+test('getPublicAssetFallbackUrls produces ordered unique fallback candidates for repo-prefixed vehicle images', () => {
+  const candidates = getPublicAssetFallbackUrls(
+    '/AlifCarImport/assets/alif-cars/song.jpg',
+    undefined,
+    { hostname: 'ais-pre-example.run.app', pathname: '/' }
+  );
+  assert.deepEqual(candidates, [
+    '/assets/alif-cars/song.jpg',
+    '/AlifCarImport/assets/alif-cars/song.jpg',
+  ]);
+
+  const ghCandidates = getPublicAssetFallbackUrls(
+    '/assets/alif-cars/song.jpg',
+    undefined,
+    { hostname: 'mubyzeru.github.io', pathname: '/AlifCarImport/' }
+  );
+  assert.deepEqual(ghCandidates, [
+    '/AlifCarImport/assets/alif-cars/song.jpg',
+    '/assets/alif-cars/song.jpg',
+  ]);
+});
+
 

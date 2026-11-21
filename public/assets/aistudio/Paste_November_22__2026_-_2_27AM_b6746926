@@ -1,0 +1,518 @@
+AdminMobile Dashboard
+Gemini
+Gemini 4 Neon
+Ran for 1m 44s
+
+Action history
+I fixed the multi-device session sync and login notification issue and deployed the updated Firestore security rules.
+What Was Causing the Problem
+Firestore rules were blocking device & alert sync: Your Firestore security rules previously denied all reads and writes to the adminSessions and loginAlerts collections by default. When the app hit PERMISSION_DENIED, it silently stopped listening for other devices—so Active Devices could only ever show 1 (the local phone), and remote login alerts never arrived.
+Remote session alerts & sign-out races: New remote sessions weren't automatically surfaced as login alerts if a matching alert document wasn't written yet, and signing out could race with revoking the session in Firestore.
+What Was Fixed
+Deployed Firestore security rules for adminSessions & loginAlerts: Authorized admins (your owner account and allowlisted admin emails/accounts) can now create, list, update heartbeats, confirm/block login alerts, and remotely revoke sessions in real time while blocking non-admins and spoofed/unverified accounts.
+Live multi-device sync & notifications in the app:
+Removed the silent cloud-sync shutdown and added clear error reporting if sync is interrupted.
+Whenever another device appears as active in adminSessions or writes to loginAlerts, the app updates Active Devices immediately, displays the signed-in admin email on each device card, and triggers an Android notification (deduplicated so you never get double alerts).
+Added a notification permission banner inside Login Alerts on Android 13+ if system notifications are currently disabled on your phone.
+Added foreground session heartbeats and clean session revocation before sign-out.
+Important Note for Your Website Admin Page
+Two Android devices using this app will now sync Active Devices and send Login Alerts automatically.
+For website admin logins (alifcarimport.com / GitHub Pages) to also appear in Active Devices and trigger notifications on your phone, your website's login handler must write to the same Firestore database (ai-studio-alifcarportal-c5b73261-7322-4966-b5e2-59c51963e99b) right after a verified admin signs in:
+Collection adminSessions/{sessionId} (e.g., sess_<uid>_<browserId>):
+Required fields: id (matches doc ID), uid (auth.currentUser.uid), deviceId, deviceName (e.g., "Chrome on Windows"), platform ("Website"), email, location, loginAtMillis (number), lastActiveMillis (number), status ("active"), createdAt (serverTimestamp()), updatedAt (serverTimestamp()).
+On website sign-out, update status: "revoked" and updatedAt: serverTimestamp().
+Collection loginAlerts/{alertId} (optional—the app will still notify from adminSessions, or you can also write an alert directly):
+Required fields: id (matches doc ID), sessionId, uid (auth.currentUser.uid), email, deviceName, platform ("Website"), location, timestampMillis (number), decision ("pending"), createdAt (serverTimestamp()), updatedAt (serverTimestamp()).
+Email/password accounts: Ensure the admin's email is verified in Firebase Auth (required by the security rules to prevent email spoofing) and included in Admin Access.
+Checkpoint
+And dont show the all access even the posted cars if someone trys to log in withowt alifcarimports@gmail.com email and unless its hasn't get approved to access the admin page
+Gemini 4 Neon
+Ran for 5m 19s
+
+Action history
+Here are key actions taken for the app:
+
+Edited 4 files
+app/src/main/java/com/example/auth/AdminAccessGate.kt
+app/src/main/java/com/example/auth/AuthScreen.kt
+app/src/main/java/com/example/MainActivity.kt
+app/src/test/java/com/example/ExampleUnitTest.kt
+Built
+Waiting for Android unit tests to complete...
+I locked the entire app behind a server-verified admin approval gate so unauthorized accounts can never view posted vehicles or any admin screens.
+What Changed
+Strict Admin Approval Gate Before Loading Anything:
+Only a verified alifcarimports@gmail.com account or an account explicitly approved under Admin Access (verified live against Firestore) can enter the app.
+While checking approval, the app shows a Verifying admin approval… screen without loading any vehicles, TikTok posts, inquiries, or dashboard controls.
+Zero Data Exposure for Unapproved Accounts:
+If someone signs in with any other email that has not been approved, they are blocked on an Admin Approval Required screen—no posted cars, metrics, or admin tabs are fetched or displayed.
+From that screen, they can tap Sign Out & Switch Account (which prevents auto-signing back into the blocked account) or Re-check Approval once approved by the owner.
+Live Revocation:
+If an approved admin's email is later removed from Admin Access, the app detects the change in real time, stops loading vehicle/portal data, and immediately returns them to the Admin Approval Required screen.
+Fail-Closed Offline Protection:
+If the device cannot reach the server to verify a non-owner account's approval, access remains blocked until verified. (Your public showroom website remains readable to website visitors.)
+Checkpoint
+I cant update the app, it can't be installed. What is the problem, and fix it
+Screenshot_20261121_213316_Package installer.jpg
+Screenshot_20261121_213316_Package installer.jpg
+Gemini 4 Neon
+Ran for 3m 25s
+
+Action history
+Here are key actions taken for the app:
+
+Edited 2 files
+app/build.gradle.kts
+.github/workflows/android.yml
+Built
+Why Android Showed "App not installed"
+There were two causes blocking in-place APK updates:
+Static version number (versionCode = 1): Every build was stamped with the exact same internal versionCode (1) instead of incrementing with each release.
+Signing key mismatch: Android refuses to update an existing app if the new APK is signed with a different key than the copy already installed on the phone. Previously, the GitHub Actions workflow had a fallback that could silently generate a brand-new random keystore on each run if the keystore file/secret was missing—which also breaks in-place updates and Google Sign-In. (This also happens if the old copy on your phone was installed from an AI Studio export or an earlier run with a different signature.)
+What Was Fixed
+Auto-incrementing versionCode and versionName: Every GitHub Actions release now automatically increments the APK's internal versionCode and versionName (1.0.<run_number>) so Android always recognizes newer releases as valid upgrades (and local builds now default to versionCode = 2 / 1.0.1).
+Locked stable signing key in GitHub Actions: Removed the random keystore generation fallback so GitHub Actions always signs with the same consistent project keystore (from DEBUG_KEYSTORE_BASE64 secret or the project's committed base64 keystore) and verifies the APK signature before publishing the release.
+One-Time Step on Your Phone
+Push these changes to GitHub so a new release is built with the stable key and higher versionCode.
+If the copy currently on your phone still says "App not installed" (because that older copy was signed with a different key), uninstall the old Alif Car Import app once, then install the new Alif-Car-Imports.apk. (All cars, TikTok posts, inquiries, and admin settings are stored safely in Firebase and won't be lost.)
+From that point on, every future release will update directly over the installed app without uninstalling.
+What Caused "App not installed"
+When Android blocks an APK update with App not installed, there are two causes in your setup:
+Signing Key Mismatch (Main Cause): If your previous GitHub Actions build didn't find the saved keystore (or if the copy already on your phone came from a different build/AI Studio export), the workflow previously fell back to keytool -genkeypair, which generated a brand-new random signing key on every run. Android refuses to update an installed app when the new APK has a different signing signature.
+Stuck Version Number: Every APK was still being built with versionCode = 1 and versionName = "1.0", even though the GitHub Release number was increasing.
+What Was Fixed
+Auto-Incrementing Version Code & Name: Updated the Android build configuration so every GitHub Actions build automatically increments versionCode and versionName using the GitHub run number (1.0.<run_number>, and versionCode = 2 / 1.0.1 locally), so Android always recognizes each new release as a valid upgrade.
+Locked Stable Signing Key in CI: Removed the random throwaway keystore fallback from the GitHub Actions workflow so every release is signed with the exact same stable debug keystore (and verifies the APK signature before publishing). If the keystore file or secret is ever missing on GitHub, the build will now fail loudly instead of publishing an uninstallable APK.
+What to Do Next on Your Phone
+Push these changes to GitHub and download the new Alif-Car-Imports.apk from the latest GitHub Release.
+One-time step if the old installed copy had a different signature: If tapping Update still shows App not installed this one time, uninstall the old Alif Car Import app once, then install the new Alif-Car-Imports.apk. (All your posted vehicles, TikTok links, inquiries, and admin settings are stored safely in Firebase cloud, so nothing will be lost.)
+After that install, every future GitHub Release will update cleanly in place without needing to uninstall again.
+Checkpoint
+It's worked but it didnt show whos logged in the website. Make it to show that to
+Gemini 4 Neon
+Ran for 7m 18s
+
+Action history
+Here are key actions taken for the app:
+
+Edited 6 files
+app/src/main/java/com/example/data/model/SecurityModels.kt
+app/src/main/java/com/example/data/firebase/SecuritySessionRepository.kt
+app/src/main/java/com/example/ui/viewmodel/PortalViewModel.kt
+app/src/main/java/com/example/MainActivity.kt
+app/src/main/java/com/example/ui/components/AccountSettingsScreen.kt
+app/src/test/java/com/example/ExampleUnitTest.kt
+Built
+Android App Updates
+The Android app is now upgraded to clearly display who is logged in on the Website alongside Mobile App sessions:
+Website vs. Mobile Breakdown: In Settings → Active Devices, a summary bar now shows live counts for Mobile App and Website sessions, plus a Refresh button that pulls the latest sessions and login alerts directly from the Firestore server (Source.SERVER) and runs automatically when you open Settings.
+Website Session Badges & Signed-In Email: Website logins appear with a globe icon, a green Website pill badge, the browser/device name, and the signed-in admin's email address prominently displayed on both the list card and the device details dialog.
+Live Alerts & Remote Sign-Out: Any website login written to adminSessions or loginAlerts automatically triggers a login alert notification on your phone and lets you tap "It wasn't me" or "Log Out Device" to revoke that website session.
+Why Website Logins Don't Show Up Yet (One Small Website Step Needed)
+Firebase Authentication does not expose a list of active browser sessions to other devices. Because your website (alifcarimport.com / AlifCarImport repo) lives in a separate repository outside this Android project, the website admin page needs to record its session into the shared Firestore database (ai-studio-alifcarportal-c5b73261-7322-4966-b5e2-59c51963e99b) when an admin signs in.
+Once you add the helper below to your website's admin authentication code, anyone who signs into the website admin page will immediately show up under Active Devices (with their email and Website badge) and trigger a Login Alert notification on the Android app.
+Drop-in Website Helper (webAdminSessionSync.js)
+Add this file to your website project (compatible with Firebase JS SDK v9+ modular) and call startWebAdminSession(auth, app, user) right after an admin signs in, and endWebAdminSession(app, user) when they click Sign Out:
+JavaScript
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  onSnapshot,
+  serverTimestamp,
+} from "firebase/firestore";
+import { signOut } from "firebase/auth";
+
+const FIRESTORE_DB_ID = "ai-studio-alifcarportal-c5b73261-7322-4966-b5e2-59c51963e99b";
+const DEVICE_ID_KEY = "alif_web_admin_device_id";
+
+let unsubscribeSessionWatch = null;
+
+function sanitizeId(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+function getOrCreateWebDeviceId() {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = (crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`).replace(/-/g, "");
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
+function getSessionId(uid) {
+  const cleanUid = sanitizeId(uid).slice(0, 10) || "admin";
+  const cleanDev = sanitizeId(getOrCreateWebDeviceId()).slice(0, 12) || "browser";
+  return `web_${cleanUid}_${cleanDev}`;
+}
+
+function detectBrowserDeviceName() {
+  const ua = navigator.userAgent || "";
+  const browser = /Edg\//.test(ua)
+    ? "Edge"
+    : /Chrome\//.test(ua)
+    ? "Chrome"
+    : /Safari\//.test(ua) && !/Chrome\//.test(ua)
+    ? "Safari"
+    : /Firefox\//.test(ua)
+    ? "Firefox"
+    : "Web Browser";
+
+  const os = /Android/i.test(ua)
+    ? "Android"
+    : /iPhone|iPad|iPod/i.test(ua)
+    ? "iOS"
+    : /Windows/i.test(ua)
+    ? "Windows"
+    : /Mac OS X/i.test(ua)
+    ? "macOS"
+    : /Linux/i.test(ua)
+    ? "Linux"
+    : "Web";
+
+  return `${browser} on ${os}`.slice(0, 160);
+}
+
+function getFallbackLocation() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Web";
+    return tz.replace(/_/g, " ").slice(0, 160);
+  } catch {
+    return "Website";
+  }
+}
+
+/**
+ * Call this inside onAuthStateChanged when an authorized admin signs in on the website.
+ * Note: The admin's Firebase Auth account must have a verified email to pass Firestore rules.
+ */
+export async function startWebAdminSession(auth, firebaseApp, user) {
+  if (!user || !user.emailVerified) return;
+
+  const db = getFirestore(firebaseApp, FIRESTORE_DB_ID);
+  const sessionId = getSessionId(user.uid);
+  const deviceId = getOrCreateWebDeviceId().slice(0, 128);
+  const deviceName = detectBrowserDeviceName();
+  const email = (user.email || "").trim().slice(0, 254);
+  const location = getFallbackLocation();
+  const userAgent = (navigator.userAgent || "").slice(0, 300);
+  const now = Date.now();
+
+  const sessionRef = doc(db, "adminSessions", sessionId);
+  const existingSnap = await getDoc(sessionRef);
+
+  if (!existingSnap.exists()) {
+    await setDoc(sessionRef, {
+      id: sessionId,
+      uid: user.uid.slice(0, 128),
+      deviceId,
+      deviceName,
+      platform: "Website",
+      email,
+      location,
+      loginAtMillis: now,
+      lastActiveMillis: now,
+      status: "active",
+      userAgent,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await updateDoc(sessionRef, {
+      deviceName,
+      platform: "Website",
+      email,
+      location,
+      loginAtMillis: now,
+      lastActiveMillis: now,
+      status: "active",
+      userAgent,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  // Create a login alert once per browser tab login so the Android app sends a notification
+  const alertFlagKey = `alif_web_alert_sent_${user.uid}_${user.metadata?.lastSignInTime || ""}`;
+  if (!sessionStorage.getItem(alertFlagKey)) {
+    const alertId = `alert_web_${sanitizeId(crypto?.randomUUID?.() || `${now}`).slice(0, 16)}`;
+    await setDoc(doc(db, "loginAlerts", alertId), {
+      id: alertId,
+      sessionId,
+      uid: user.uid.slice(0, 128),
+      email,
+      deviceName,
+      platform: "Website",
+      location,
+      timestampMillis: now,
+      decision: "pending",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    sessionStorage.setItem(alertFlagKey, "1");
+  }
+
+  // Live remote sign-out: if revoked from the Android app, sign out this browser immediately
+  if (unsubscribeSessionWatch) unsubscribeSessionWatch();
+  unsubscribeSessionWatch = onSnapshot(sessionRef, (snap) => {
+    if (snap.exists() && snap.data()?.status === "revoked") {
+      stopWebSessionWatcher();
+      signOut(auth);
+    }
+  });
+}
+
+/**
+ * Call this right before calling signOut(auth) on the website admin logout button.
+ */
+export async function endWebAdminSession(firebaseApp, user) {
+  stopWebSessionWatcher();
+  if (!user) return;
+  try {
+    const db = getFirestore(firebaseApp, FIRESTORE_DB_ID);
+    const sessionId = getSessionId(user.uid);
+    await updateDoc(doc(db, "adminSessions", sessionId), {
+      status: "revoked",
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.warn("Unable to mark website admin session revoked:", err);
+  }
+}
+
+export function stopWebSessionWatcher() {
+  if (unsubscribeSessionWatch) {
+    unsubscribeSessionWatch();
+    unsubscribeSessionWatch = null;
+  }
+}
+Quick Hook-Up in Your Website Admin Auth Listener
+JavaScript
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    await startWebAdminSession(auth, app, user);
+  } else {
+    stopWebSessionWatcher();
+  }
+});
+
+// In your website Logout button handler:
+async function handleLogout() {
+  await endWebAdminSession(app, auth.currentUser);
+  await signOut(auth);
+}
+Once deployed to your website, open Settings → Active Devices in the Android app (or tap the new Refresh icon) and every active website admin login will appear live with their email, browser/OS, and Website badge.
+Checkpoint
+What do you want me to do with these codes?
+Gemini 4 Neon
+Ran for 19s
+This project only contains your Android app, not your website (alifcarimport.com / your AlifCarImport repo).
+Your Android app is already finished and ready to display website logins—those JavaScript snippets are meant to be added to your website project so the website tells Firebase whenever someone logs in or out of the admin page.
+Here are the two easiest ways to add it to your website:
+Option 1: Easiest (if you built your website in AI Studio or another AI coding tool)
+Open your website project (where alifcarimport.com is built).
+Copy the JavaScript code from my previous message and paste it into that chat with this instruction:
+"Please add this webAdminSessionSync.js file to my website and connect startWebAdminSession to my admin login (onAuthStateChanged) and endWebAdminSession to my admin logout button."
+Save and deploy/republish your website.
+Option 2: Manual (in GitHub or your code editor)
+Open your website repository (AlifCarImport).
+Create a new file named webAdminSessionSync.js next to your existing Firebase config file (for example in src/ or src/lib/) and paste the first code block into it.
+Open the file where your website checks admin login and handles the Logout button (search your website code for onAuthStateChanged and signOut):
+Import startWebAdminSession, endWebAdminSession, and stopWebSessionWatcher from ./webAdminSessionSync.
+Call startWebAdminSession(auth, app, user) when an admin is signed in.
+Call endWebAdminSession(app, auth.currentUser) right before signOut(auth) in your Logout button.
+Push/deploy the updated website.
+After you deploy the website:
+Log into alifcarimport.com/admin, then open Settings → Active Devices in your Android app (and tap the Refresh button if needed). You will immediately see the Website badge, the browser/device name, and the exact email logged into the website—plus a Login Alert notification on your phone.
+When someone tries to log-in in the website i want to see alerts and see active devices on app not on the website's admin page?
+Gemini 4 Neon
+Ran for 12s
+Yes — that code adds nothing visible to the website. All alerts and the Active Devices list appear only inside your Android app.
+Think of that small website script as a silent background sensor:
+On the website (invisible): When someone logs into the website admin page, the script quietly sends a message to Firebase in the background (their email, browser/device, and time). Nothing changes on the website's screen.
+On your Android app (visible): Your phone receives that message from Firebase, pops up a Login Alert notification, and lists that browser + email under Settings → Active Devices with a green Website badge.
+Remote kick-out from your phone: If you tap "It wasn't me" or "Log Out Device" in your Android app, that background script on the website sees it and immediately signs that browser out.
+Without that silent background script on the website, the website never tells Firebase that someone signed in—so your Android app has no way of knowing anyone is on the website.
+(Note: If you also want alerts when an unapproved/unknown email tries to log into the website—not just approved admins—let me know and I can update your Firestore rules and Android app to show blocked login attempts too.)
+You're sent 2 codes whichone i have to paste on google ai stodio on the website progect
+Gemini 4 Neon
+Ran for 32s
+Simplifying Code Integration
+I'm focused on providing a single, ready-to-use code snippet. Avoiding unnecessary complexity is the goal. My aim is to streamline the user's experience by removing the need to manage multiple code segments. I am trying to minimize their mental load by crafting a single efficient solution.
+You need both pieces together—so to make it super easy, just copy and paste this single prompt into Google AI Studio on your website project:
+Copy and paste everything below into your Website project in Google AI Studio:
+Add silent background session reporting to my website admin portal so my Android admin app can see who is logged into the website, receive login alerts, and remotely log out website sessions.
+Important: Do NOT add any new visible UI, alerts, or active devices panel to the website. This must run silently in the background only.
+Create a helper file webAdminSessionSync.js (or .ts if the project uses TypeScript) using the exact Firestore database ID ai-studio-alifcarportal-c5b73261-7322-4966-b5e2-59c51963e99b and this exact schema (it must match my existing Firestore security rules):
+JavaScript
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  onSnapshot,
+  serverTimestamp,
+} from "firebase/firestore";
+import { signOut } from "firebase/auth";
+
+const FIRESTORE_DB_ID = "ai-studio-alifcarportal-c5b73261-7322-4966-b5e2-59c51963e99b";
+const DEVICE_ID_KEY = "alif_web_admin_device_id";
+
+let unsubscribeSessionWatch = null;
+
+function sanitizeId(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+function getOrCreateWebDeviceId() {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = (crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`).replace(/-/g, "");
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
+function getSessionId(uid) {
+  const cleanUid = sanitizeId(uid).slice(0, 10) || "admin";
+  const cleanDev = sanitizeId(getOrCreateWebDeviceId()).slice(0, 12) || "browser";
+  return `web_${cleanUid}_${cleanDev}`;
+}
+
+function detectBrowserDeviceName() {
+  const ua = navigator.userAgent || "";
+  const browser = /Edg\//.test(ua)
+    ? "Edge"
+    : /Chrome\//.test(ua)
+    ? "Chrome"
+    : /Safari\//.test(ua) && !/Chrome\//.test(ua)
+    ? "Safari"
+    : /Firefox\//.test(ua)
+    ? "Firefox"
+    : "Web Browser";
+
+  const os = /Android/i.test(ua)
+    ? "Android"
+    : /iPhone|iPad|iPod/i.test(ua)
+    ? "iOS"
+    : /Windows/i.test(ua)
+    ? "Windows"
+    : /Mac OS X/i.test(ua)
+    ? "macOS"
+    : /Linux/i.test(ua)
+    ? "Linux"
+    : "Web";
+
+  return `${browser} on ${os}`.slice(0, 160);
+}
+
+function getFallbackLocation() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Web";
+    return tz.replace(/_/g, " ").slice(0, 160);
+  } catch {
+    return "Website";
+  }
+}
+
+export async function startWebAdminSession(auth, firebaseApp, user) {
+  if (!user || !user.emailVerified) return;
+
+  const db = getFirestore(firebaseApp, FIRESTORE_DB_ID);
+  const sessionId = getSessionId(user.uid);
+  const deviceId = getOrCreateWebDeviceId().slice(0, 128);
+  const deviceName = detectBrowserDeviceName();
+  const email = (user.email || "").trim().slice(0, 254);
+  const location = getFallbackLocation();
+  const userAgent = (navigator.userAgent || "").slice(0, 300);
+  const now = Date.now();
+
+  const sessionRef = doc(db, "adminSessions", sessionId);
+  const existingSnap = await getDoc(sessionRef);
+
+  if (!existingSnap.exists()) {
+    await setDoc(sessionRef, {
+      id: sessionId,
+      uid: user.uid.slice(0, 128),
+      deviceId,
+      deviceName,
+      platform: "Website",
+      email,
+      location,
+      loginAtMillis: now,
+      lastActiveMillis: now,
+      status: "active",
+      userAgent,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await updateDoc(sessionRef, {
+      deviceName,
+      platform: "Website",
+      email,
+      location,
+      loginAtMillis: now,
+      lastActiveMillis: now,
+      status: "active",
+      userAgent,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  const alertFlagKey = `alif_web_alert_sent_${user.uid}_${user.metadata?.lastSignInTime || ""}`;
+  if (!sessionStorage.getItem(alertFlagKey)) {
+    const alertId = `alert_web_${sanitizeId(crypto?.randomUUID?.() || `${now}`).slice(0, 16)}`;
+    await setDoc(doc(db, "loginAlerts", alertId), {
+      id: alertId,
+      sessionId,
+      uid: user.uid.slice(0, 128),
+      email,
+      deviceName,
+      platform: "Website",
+      location,
+      timestampMillis: now,
+      decision: "pending",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    sessionStorage.setItem(alertFlagKey, "1");
+  }
+
+  if (unsubscribeSessionWatch) unsubscribeSessionWatch();
+  unsubscribeSessionWatch = onSnapshot(sessionRef, (snap) => {
+    if (snap.exists() && snap.data()?.status === "revoked") {
+      stopWebSessionWatcher();
+      signOut(auth);
+    }
+  });
+}
+
+export async function endWebAdminSession(firebaseApp, user) {
+  stopWebSessionWatcher();
+  if (!user) return;
+  try {
+    const db = getFirestore(firebaseApp, FIRESTORE_DB_ID);
+    const sessionId = getSessionId(user.uid);
+    await updateDoc(doc(db, "adminSessions", sessionId), {
+      status: "revoked",
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.warn("Unable to mark website admin session revoked:", err);
+  }
+}
+
+export function stopWebSessionWatcher() {
+  if (unsubscribeSessionWatch) {
+    unsubscribeSessionWatch();
+    unsubscribeSessionWatch = null;
+  }
+}
+Connect it to my existing admin auth listener and logout handler:
+Inside onAuthStateChanged: when an authorized admin user is signed in, call startWebAdminSession(auth, app, user); when signed out, call stopWebSessionWatcher().
+Inside the admin Logout button handler: call await endWebAdminSession(app, auth.currentUser) right before await signOut(auth).
+Do NOT modify my Firestore rules or add any visible UI on the website.

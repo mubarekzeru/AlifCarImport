@@ -664,6 +664,43 @@ async function startServer(): Promise<void> {
   });
 
   const isProd = process.env.NODE_ENV === 'production';
+  const assetsRootDir = isProd
+    ? path.join(__dirname, 'dist', 'assets')
+    : path.join(__dirname, 'public', 'assets');
+
+  // Serve repo-prefixed static assets (e.g. /AlifCarImport/assets/...) directly instead of SPA HTML
+  app.get(/^\/[^/]+\/assets\/(.+)$/, async (req, res, next) => {
+    const rawRelPath = req.params[0];
+    if (!rawRelPath) {
+      next();
+      return;
+    }
+    let decodedRelPath: string;
+    try {
+      decodedRelPath = decodeURIComponent(rawRelPath);
+    } catch {
+      next();
+      return;
+    }
+    const candidate = path.resolve(assetsRootDir, decodedRelPath);
+    const relative = path.relative(assetsRootDir, candidate);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+      next();
+      return;
+    }
+    try {
+      const stat = await fs.stat(candidate);
+      if (stat.isFile()) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.sendFile(candidate);
+        return;
+      }
+    } catch {
+      // Fall through to normal static/Vite handler
+    }
+    next();
+  });
+
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

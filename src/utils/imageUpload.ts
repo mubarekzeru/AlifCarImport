@@ -11,13 +11,40 @@ function encodeCanvasWithinBudget(
     }
   }
 
+  let workingCanvas = canvas;
   let quality = Math.min(Math.max(initialQuality, 0.45), 0.92);
-  let dataUrl = canvas.toDataURL('image/jpeg', quality);
+  let dataUrl = workingCanvas.toDataURL('image/jpeg', quality);
   while (dataUrl.length > maxDataUrlChars && quality > 0.42) {
     quality = Math.max(0.4, quality - 0.12);
-    dataUrl = canvas.toDataURL('image/jpeg', quality);
+    dataUrl = workingCanvas.toDataURL('image/jpeg', quality);
   }
+
+  // If still over budget (e.g. very high-detail mobile camera shot), step down dimensions cleanly
+  let downscaleAttempts = 0;
+  while (dataUrl.length > maxDataUrlChars && downscaleAttempts < 4 && workingCanvas.width > 360) {
+    downscaleAttempts += 1;
+    const nextW = Math.max(320, Math.round(workingCanvas.width * 0.78));
+    const nextH = Math.max(200, Math.round(workingCanvas.height * 0.78));
+    const resized = document.createElement('canvas');
+    resized.width = nextW;
+    resized.height = nextH;
+    const ctx = resized.getContext('2d');
+    if (!ctx) break;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, nextW, nextH);
+    ctx.drawImage(workingCanvas, 0, 0, nextW, nextH);
+    workingCanvas = resized;
+    dataUrl = workingCanvas.toDataURL('image/jpeg', 0.68);
+  }
+
   return dataUrl;
+}
+
+function isLikelyImageFile(file: File): boolean {
+  if (file.type && file.type.startsWith('image/')) {
+    return true;
+  }
+  return /\.(jpe?g|png|webp|gif|avif|heic|heif|bmp)$/i.test(file.name || '');
 }
 
 export function readFileAsResizedDataUrl(
@@ -27,7 +54,7 @@ export function readFileAsResizedDataUrl(
   maxDataUrlChars = 320_000
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    if (!file.type.startsWith('image/')) {
+    if (!isLikelyImageFile(file)) {
       reject(new Error('Please select a valid image file (JPG, PNG, or WebP).'));
       return;
     }
@@ -38,9 +65,11 @@ export function readFileAsResizedDataUrl(
       const img = new Image();
       img.onerror = () => reject(new Error('Selected file could not be decoded as an image.'));
       img.onload = () => {
-        const scale = img.width > maxWidth ? maxWidth / img.width : 1;
-        const targetWidth = Math.max(1, Math.round(img.width * scale));
-        const targetHeight = Math.max(1, Math.round(img.height * scale));
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        const scale = w > maxWidth ? maxWidth / w : 1;
+        const targetWidth = Math.max(1, Math.round(w * scale));
+        const targetHeight = Math.max(1, Math.round(h * scale));
 
         const canvas = document.createElement('canvas');
         canvas.width = targetWidth;

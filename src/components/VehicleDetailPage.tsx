@@ -16,6 +16,7 @@ import {
   buildWhatsAppHref,
   formatPrice,
   formatVehicleTileModel,
+  getPublicAssetFallbackUrls,
   getRelatedShowroomVehicles,
   getSimilarVehicles,
   getVehicleGalleryImages,
@@ -237,13 +238,23 @@ export function VehicleDetailPage({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Left Column: Main Large Image + Thumbnails Row + Share Buttons */}
           <ScrollReveal y={26} className="lg:col-span-7 space-y-3">
-            <div className="relative aspect-[4/3] w-full rounded-xl overflow-hidden bg-zinc-950 border border-zinc-800">
+            <div className="relative aspect-[4/3] w-full shrink-0 rounded-xl overflow-hidden bg-zinc-950 border border-zinc-800">
               {currentImage ? (
                 <img
                   src={currentImage}
                   alt={`${vehicle.title} photo ${activeIndex + 1} of ${images.length}`}
+                  decoding="async"
                   referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    const el = e.currentTarget;
+                    const fallbacks = getPublicAssetFallbackUrls(currentImage);
+                    const nextIdx = Number(el.dataset.fallbackIdx || '0') + 1;
+                    if (nextIdx < fallbacks.length) {
+                      el.dataset.fallbackIdx = String(nextIdx);
+                      el.src = fallbacks[nextIdx];
+                    }
+                  }}
+                  className="absolute inset-0 block w-full h-full object-cover"
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-sm text-zinc-500">
@@ -307,7 +318,7 @@ export function VehicleDetailPage({
                         onClick={() => setActiveIndex(absoluteIndex)}
                         aria-label={`View photo ${absoluteIndex + 1}`}
                         aria-current={isSelected ? 'true' : undefined}
-                        className={`aspect-[4/3] rounded-md overflow-hidden border-2 transition-all cursor-pointer bg-zinc-900 ${
+                        className={`relative aspect-[4/3] shrink-0 rounded-md overflow-hidden border-2 transition-all cursor-pointer bg-zinc-900 ${
                           isSelected
                             ? 'border-[#D92027] ring-1 ring-[#D92027]/50'
                             : 'border-zinc-800 hover:border-zinc-500 opacity-80 hover:opacity-100'
@@ -316,8 +327,18 @@ export function VehicleDetailPage({
                         <img
                           src={imgUrl}
                           alt={`${vehicle.title} thumbnail ${absoluteIndex + 1}`}
+                          decoding="async"
                           referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            const el = e.currentTarget;
+                            const fallbacks = getPublicAssetFallbackUrls(imgUrl);
+                            const nextIdx = Number(el.dataset.fallbackIdx || '0') + 1;
+                            if (nextIdx < fallbacks.length) {
+                              el.dataset.fallbackIdx = String(nextIdx);
+                              el.src = fallbacks[nextIdx];
+                            }
+                          }}
+                          className="absolute inset-0 block w-full h-full object-cover"
                         />
                       </button>
                     );

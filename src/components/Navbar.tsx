@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { MessageCircle, Search, ShoppingCart, Trash2, X } from 'lucide-react';
 import type { Vehicle } from '../types/showroom';
-import { buildWhatsAppHref, formatPrice } from '../utils/inventory';
+import { buildWhatsAppHref, formatPrice, resolvePublicAssetUrl } from '../utils/inventory';
 
 interface NavbarProps {
   companyName: string;
@@ -301,8 +301,9 @@ export function Navbar({
                             className="flex items-center gap-2.5 flex-1 min-w-0 text-left cursor-pointer group"
                           >
                             <img
-                              src={item.imageUrl}
+                              src={resolvePublicAssetUrl(item.imageUrl)}
                               alt={item.title}
+                              decoding="async"
                               referrerPolicy="no-referrer"
                               className="w-12 h-9 rounded-md object-cover bg-zinc-900 shrink-0"
                             />
