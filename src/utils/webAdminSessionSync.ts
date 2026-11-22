@@ -17,6 +17,7 @@ const DEVICE_ID_KEY = 'alif_web_admin_device_id';
 
 export interface WebAdminSessionOptions {
   onForcedSignOut?: () => void;
+  skipInitialSecurityCheck?: boolean;
 }
 
 let unsubscribeSessionWatch: Unsubscribe | null = null;
@@ -251,14 +252,16 @@ export async function startWebAdminSession(
     const securityRef = doc(db, 'config', 'security');
 
     // Enforce config/security.forceSignOutBefore before writing session or login alert docs
-    const forcedOutBeforeSync = await checkForceSignOutBySecurityConfig(
-      auth,
-      firebaseApp,
-      user,
-      options
-    );
-    if (forcedOutBeforeSync || startGen !== watchGeneration) {
-      return false;
+    if (!options?.skipInitialSecurityCheck) {
+      const forcedOutBeforeSync = await checkForceSignOutBySecurityConfig(
+        auth,
+        firebaseApp,
+        user,
+        options
+      );
+      if (forcedOutBeforeSync || startGen !== watchGeneration) {
+        return false;
+      }
     }
 
     const deviceName = detectBrowserDeviceName();

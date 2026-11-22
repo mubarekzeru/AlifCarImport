@@ -48,6 +48,7 @@ import {
   resolveTikTokAdminCardMode,
   shouldAutoFetchTikTokCover,
 } from '../utils/inventory';
+import { didTikTokPostChange } from '../utils/firestoreSyncLogic';
 import { fetchTikTokVideoMetadata } from '../utils/storeClient';
 import { SocialMediaIconRow } from './SocialIcons';
 import { VehicleFormModal } from './VehicleFormModal';
@@ -60,6 +61,7 @@ interface AdminDashboardProps {
   adminEmail?: string | null;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
   saveError?: string | null;
+  onDismissSaveError?: () => void;
   onUpdateStore: (
     nextStore: ShowroomStore | ((prev: ShowroomStore) => ShowroomStore),
     immediate?: boolean
@@ -77,6 +79,7 @@ export function AdminDashboard({
   adminEmail,
   saveState,
   saveError,
+  onDismissSaveError,
   onUpdateStore,
   onPublishAndView,
   onSignOut,
@@ -413,44 +416,53 @@ export function AdminDashboard({
         [post.id]: nextResolvedUrl,
       }));
 
-      await onUpdateStore((prev) => ({
-        ...prev,
-        tiktok: {
-          ...prev.tiktok,
-          posts: prev.tiktok.posts.map((current) => {
-            if (current.id !== post.id) return current;
-            const shouldReplaceWithNewVideo = forceOverwrite || isNewVideoLink;
-            const hasCustomCaption =
-              Boolean(current.caption.trim()) && current.caption !== DEFAULT_TIKTOK_CAPTION;
-            const nextDescription =
-              hasCustomCaption && !shouldReplaceWithNewVideo
-                ? current.caption
-                : meta.description || current.caption;
-            const derivedTitle =
-              meta.suggestedTitle ||
-              (meta.description ? deriveTitleFromVideoDescription(meta.description) : '');
-            const hasCustomTitle =
-              Boolean(current.title.trim()) && current.title !== DEFAULT_TIKTOK_TITLE;
-            const nextTitle =
-              hasCustomTitle && !shouldReplaceWithNewVideo
-                ? current.title
-                : derivedTitle || current.title;
-            const hasCustomCover = !isPlaceholderTikTokCover(current.coverImageUrl);
-            const nextCover =
-              hasCustomCover && !shouldReplaceWithNewVideo
-                ? current.coverImageUrl
-                : meta.coverImageUrl || meta.coverOptions[0]?.url || current.coverImageUrl;
+      const shouldReplaceWithNewVideo = forceOverwrite || isNewVideoLink;
+      const computeUpdatedPost = (current: TikTokPost): TikTokPost => {
+        const hasCustomCaption =
+          Boolean(current.caption.trim()) && current.caption !== DEFAULT_TIKTOK_CAPTION;
+        const nextDescription =
+          hasCustomCaption && !shouldReplaceWithNewVideo
+            ? current.caption
+            : meta.description || current.caption;
+        const derivedTitle =
+          meta.suggestedTitle ||
+          (meta.description ? deriveTitleFromVideoDescription(meta.description) : '');
+        const hasCustomTitle =
+          Boolean(current.title.trim()) && current.title !== DEFAULT_TIKTOK_TITLE;
+        const nextTitle =
+          hasCustomTitle && !shouldReplaceWithNewVideo
+            ? current.title
+            : derivedTitle || current.title;
+        const hasCustomCover = !isPlaceholderTikTokCover(current.coverImageUrl);
+        const nextCover =
+          hasCustomCover && !shouldReplaceWithNewVideo
+            ? current.coverImageUrl
+            : meta.coverImageUrl || meta.coverOptions[0]?.url || current.coverImageUrl;
 
-            return {
-              ...current,
-              tiktokUrl: nextResolvedUrl,
-              caption: nextDescription,
-              title: nextTitle,
-              coverImageUrl: nextCover,
-            };
+        return {
+          ...current,
+          tiktokUrl: nextResolvedUrl,
+          caption: nextDescription,
+          title: nextTitle,
+          coverImageUrl: nextCover,
+        };
+      };
+
+      const previewNext = computeUpdatedPost(post);
+      if (didTikTokPostChange(post, previewNext)) {
+        await onUpdateStore(
+          (prev) => ({
+            ...prev,
+            tiktok: {
+              ...prev.tiktok,
+              posts: prev.tiktok.posts.map((current) =>
+                current.id === post.id ? computeUpdatedPost(current) : current
+              ),
+            },
           }),
-        },
-      }), true);
+          true
+        );
+      }
 
       setTiktokFetchStatus((prev) => ({
         ...prev,
@@ -1016,7 +1028,10 @@ export function AdminDashboard({
                 )}
                 <button
                   type="button"
-                  onClick={() => setUploadNotice(null)}
+                  onClick={() => {
+                    setUploadNotice(null);
+                    onDismissSaveError?.();
+                  }}
                   className="text-xs underline opacity-80 hover:opacity-100 cursor-pointer"
                 >
                   Dismiss

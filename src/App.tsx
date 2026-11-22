@@ -23,7 +23,9 @@ import { app, auth, formatFirestoreUserMessage } from './firebase';
 import type { ShowroomStore, Vehicle, VehicleFilters, VehicleStatus } from './types/showroom';
 import {
   fetchAdminAllowlistFromFirestore,
+  subscribeAdminAccessFromFirestore,
   subscribeShowroomFromFirestore,
+  type ShowroomSyncMeta,
 } from './utils/firestoreStore';
 import {
   filterVehicles,
@@ -37,6 +39,7 @@ import {
   ensureFirestoreSeeded,
   loadShowroomStore,
   logoutAdmin,
+  readCachedShowroomStore,
   resetShowroomStore,
   saveShowroomStore,
   signInAdminWithEmailPassword,
@@ -398,7 +401,11 @@ export default function App() {
   const location = useLocation();
   const isAdminRoute = location.pathname.startsWith('/admin');
 
-  const [store, setStore] = useState<ShowroomStore>(INITIAL_SHOWROOM_STORE);
+  const initialStore = useMemo(
+    () => readCachedShowroomStore() ?? INITIAL_SHOWROOM_STORE,
+    []
+  );
+  const [store, setStore] = useState<ShowroomStore>(initialStore);
   const [loaded, setLoaded] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
@@ -409,8 +416,10 @@ export default function App() {
   const [showcaseTab, setShowcaseTab] = useState<ShowcaseTab>('all');
   const [orderedVehicleIds, setOrderedVehicleIds] = useState<string[]>(() => readStoredOrderIds());
   const saveTimerRef = useRef<number | null>(null);
-  const storeRef = useRef<ShowroomStore>(INITIAL_SHOWROOM_STORE);
+  const storeRef = useRef<ShowroomStore>(initialStore);
   const lastSyncedStoreRef = useRef<ShowroomStore | null>(null);
+  const seededOnceRef = useRef(false);
+  const [remoteSyncMeta, setRemoteSyncMeta] = useState<ShowroomSyncMeta | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -426,11 +435,14 @@ export default function App() {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (!active) return;
       if (user?.email && user.emailVerified) {
-        const remoteAllowlist = await fetchAdminAllowlistFromFirestore();
-        const allowed = isAuthorizedAdminEmail(user.email, [
-          ...(storeRef.current.adminEmails ?? []),
-          ...(remoteAllowlist ?? []),
-        ]);
+        let allowed = isAuthorizedAdminEmail(user.email, storeRef.current.adminEmails);
+        if (!allowed) {
+          const remoteAllowlist = await fetchAdminAllowlistFromFirestore();
+          allowed = isAuthorizedAdminEmail(user.email, [
+            ...(storeRef.current.adminEmails ?? []),
+            ...(remoteAllowlist ?? []),
+          ]);
+        }
         if (!active) return;
         if (allowed) {
           const handleForcedSignOut = () => {
@@ -450,13 +462,8 @@ export default function App() {
           setAdminEmail(user.email);
           void startWebAdminSession(auth, app, user, {
             onForcedSignOut: handleForcedSignOut,
+            skipInitialSecurityCheck: true,
           });
-          try {
-            await ensureFirestoreSeeded(storeRef.current);
-          } catch (err) {
-            setSaveState('error');
-            setSaveError(formatFirestoreUserMessage(err));
-          }
         } else {
           stopWebSessionWatcher();
           setAdminEmail(null);
@@ -475,25 +482,74 @@ export default function App() {
     };
   }, []);
 
+  // Subscribe ONCE to public showroom collections (config/showroom, vehicles, tiktokPosts)
+  // so signing in/out as admin never re-reads all vehicles and TikTok posts a second time.
   useEffect(() => {
-    if (!authReady) return;
     const unsubscribe = subscribeShowroomFromFirestore(
       storeRef.current,
-      Boolean(adminEmail),
-      (remoteStore, hasRemoteShowroom) => {
-        cacheShowroomStoreLocally(remoteStore);
-        storeRef.current = remoteStore;
-        if (hasRemoteShowroom) {
-          lastSyncedStoreRef.current = remoteStore;
+      (remoteStore, meta) => {
+        const mergedWithAdminEmails: ShowroomStore = {
+          ...remoteStore,
+          adminEmails: storeRef.current.adminEmails ?? remoteStore.adminEmails,
+        };
+        storeRef.current = mergedWithAdminEmails;
+        if (meta.allLoaded) {
+          cacheShowroomStoreLocally(mergedWithAdminEmails);
+          if (meta.hasConfig) {
+            lastSyncedStoreRef.current = mergedWithAdminEmails;
+          }
         }
-        setStore(remoteStore);
+        setRemoteSyncMeta(meta);
+        setStore(mergedWithAdminEmails);
         setLoaded(true);
+      },
+      (err) => {
+        setSaveState('error');
+        setSaveError(formatFirestoreUserMessage(err));
+      }
+    );
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Subscribe to config/adminAccess only when an authorized admin is signed in.
+  useEffect(() => {
+    if (!authReady || !adminEmail) return;
+    const unsubscribe = subscribeAdminAccessFromFirestore(
+      (adminEmails) => {
+        const nextStore: ShowroomStore = {
+          ...storeRef.current,
+          adminEmails,
+        };
+        storeRef.current = nextStore;
+        if (lastSyncedStoreRef.current) {
+          lastSyncedStoreRef.current = {
+            ...lastSyncedStoreRef.current,
+            adminEmails,
+          };
+        }
+        setStore(nextStore);
+      },
+      (err) => {
+        setSaveState('error');
+        setSaveError(formatFirestoreUserMessage(err));
       }
     );
     return () => {
       unsubscribe();
     };
   }, [authReady, adminEmail]);
+
+  // Run catalog seeding at most once per session using already-loaded snapshot state (0 extra reads).
+  useEffect(() => {
+    if (!adminEmail || !remoteSyncMeta?.allLoaded || seededOnceRef.current) return;
+    seededOnceRef.current = true;
+    void ensureFirestoreSeeded(storeRef.current, remoteSyncMeta).catch((err) => {
+      setSaveState('error');
+      setSaveError(formatFirestoreUserMessage(err));
+    });
+  }, [adminEmail, remoteSyncMeta]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
@@ -532,10 +588,11 @@ export default function App() {
     immediate = false
   ): Promise<boolean> => {
     if (!adminEmail) return false;
-    const prevSnapshot = lastSyncedStoreRef.current;
+    const prevBeforeEdit = storeRef.current;
+    const prevSnapshot = lastSyncedStoreRef.current ?? prevBeforeEdit;
     const nextStore =
       typeof nextStoreOrUpdater === 'function'
-        ? nextStoreOrUpdater(storeRef.current)
+        ? nextStoreOrUpdater(prevBeforeEdit)
         : nextStoreOrUpdater;
 
     storeRef.current = nextStore;
@@ -554,8 +611,8 @@ export default function App() {
 
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
-      void persistStoreNow(storeRef.current, lastSyncedStoreRef.current);
-    }, 250);
+      void persistStoreNow(storeRef.current, lastSyncedStoreRef.current ?? prevBeforeEdit);
+    }, 800);
     return true;
   };
 
@@ -1114,6 +1171,10 @@ export default function App() {
                       adminEmail={adminEmail}
                       saveState={saveState}
                       saveError={saveError}
+                      onDismissSaveError={() => {
+                        setSaveError(null);
+                        setSaveState('idle');
+                      }}
                       onUpdateStore={handleUpdateStore}
                       onResetDefaults={handleResetDefaults}
                       onSignOut={() => void handleLogoutAdmin()}

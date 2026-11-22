@@ -87,22 +87,23 @@ export function formatFirestoreUserMessage(err: unknown): string {
   if (!(err instanceof Error)) {
     return 'Unable to sync showroom data with Firebase.';
   }
+  let messageText = err.message;
   try {
     const parsed = JSON.parse(err.message) as Partial<FirestoreErrorInfo>;
     if (typeof parsed.error === 'string' && parsed.error.trim()) {
-      const raw = parsed.error;
-      if (raw.toLowerCase().includes('quota exceeded')) {
-        return 'Firebase daily quota exceeded. Usage limits reset tomorrow.';
-      }
-      if (raw.toLowerCase().includes('missing or insufficient permissions')) {
-        return 'Permission denied by Firebase security rules. Sign in with alifcarimports@gmail.com to publish changes.';
-      }
-      return raw;
+      messageText = parsed.error;
     }
   } catch {
     // Plain error message
   }
-  return err.message;
+  const lower = messageText.toLowerCase();
+  if (lower.includes('quota exceeded') || lower.includes('resource-exhausted') || lower.includes('resource_exhausted')) {
+    return 'Firebase daily quota exceeded. Cloud sync is paused until usage limits reset tomorrow (or after upgrading your Firebase plan), so changes will not sync to other browsers yet.';
+  }
+  if (lower.includes('missing or insufficient permissions')) {
+    return 'Permission denied by Firebase security rules. Sign in with alifcarimports@gmail.com to publish changes.';
+  }
+  return messageText;
 }
 
 async function testConnection(): Promise<void> {

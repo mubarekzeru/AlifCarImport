@@ -212,14 +212,25 @@ export async function checkFirebaseAdminUser(
   return { authenticated: true, email: user.email };
 }
 
-export async function ensureFirestoreSeeded(seedStore: ShowroomStore): Promise<void> {
+export async function ensureFirestoreSeeded(
+  seedStore: ShowroomStore,
+  snapshotMeta?: {
+    hasConfig: boolean;
+    vehiclesLoaded: boolean;
+    remoteVehicles: Array<{ id: string; title: string }>;
+  }
+): Promise<void> {
   if (!auth.currentUser) return;
-  const hasRemote = await checkFirestoreHasShowroom();
+  const hasRemote =
+    snapshotMeta !== undefined ? snapshotMeta.hasConfig : await checkFirestoreHasShowroom();
   if (!hasRemote) {
     await syncShowroomStoreToFirestore(seedStore, null, true);
     return;
   }
-  const existingVehicles = await fetchRemoteVehicleSummariesFromFirestore();
+  const existingVehicles =
+    snapshotMeta !== undefined && snapshotMeta.vehiclesLoaded
+      ? snapshotMeta.remoteVehicles
+      : await fetchRemoteVehicleSummariesFromFirestore();
   if (needsCatalogSyncToFirestore(existingVehicles, INITIAL_SHOWROOM_STORE.vehicles)) {
     const legacyDuplicateIds = findLegacyDuplicateVehicleIds(
       existingVehicles,
@@ -266,14 +277,14 @@ export async function saveShowroomStore(
   store: ShowroomStore,
   prevStore?: ShowroomStore | null
 ): Promise<void> {
-  cacheShowroomStoreLocally(store);
-
   if (!auth.currentUser) {
     throw new Error('Please sign in with an authorized admin account to publish changes.');
   }
 
   try {
-    await syncShowroomStoreToFirestore(store, prevStore, !prevStore);
+    await syncShowroomStoreToFirestore(store, prevStore, false);
+    // Only update the browser's local cache AFTER Firestore confirms the cloud write
+    cacheShowroomStoreLocally(store);
   } catch (err) {
     throw new Error(formatFirestoreUserMessage(err));
   }

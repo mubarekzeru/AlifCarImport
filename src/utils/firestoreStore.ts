@@ -26,10 +26,15 @@ import type {
 } from '../types/showroom';
 import {
   DEFAULT_ADMIN_EMAILS,
-  mergeRemoteVehiclesWithCatalog,
   resolvePublicAssetUrl,
   toCanonicalPublicAssetPath,
 } from './inventory';
+import {
+  filterSyncableTikTokPosts,
+  mergeShowroomSnapshotState,
+  type RemoteShowroomConfigData,
+  type RemoteTikTokPostEntry,
+} from './firestoreSyncLogic';
 
 const MAX_VEHICLE_DOC_BYTES = 920_000;
 
@@ -280,10 +285,13 @@ export async function syncShowroomStoreToFirestore(
   const prevVehiclesMap = new Map((prevStore?.vehicles ?? []).map((v) => [v.id, v]));
   const nextVehicleIds = new Set(nextStore.vehicles.map((v) => sanitizeDocId(v.id, 'veh')));
 
+  const prevSyncablePosts = filterSyncableTikTokPosts(prevStore?.tiktok.posts ?? []);
+  const nextSyncablePosts = filterSyncableTikTokPosts(nextStore.tiktok.posts);
+
   const prevPostsMap = new Map(
-    (prevStore?.tiktok.posts ?? []).map((p, idx) => [p.id, { post: p, index: idx }])
+    prevSyncablePosts.map((p, idx) => [p.id, { post: p, index: idx }])
   );
-  const nextPostIds = new Set(nextStore.tiktok.posts.map((p) => sanitizeDocId(p.id, 'tt')));
+  const nextPostIds = new Set(nextSyncablePosts.map((p) => sanitizeDocId(p.id, 'tt')));
 
   const showroomConfigChanged =
     forceFullSync ||
@@ -356,9 +364,9 @@ export async function syncShowroomStoreToFirestore(
     }
   }
 
-  // Sync added/updated TikTok posts
-  for (let i = 0; i < nextStore.tiktok.posts.length; i++) {
-    const post = nextStore.tiktok.posts[i];
+  // Sync added/updated TikTok posts (skipping blank unsaved drafts)
+  for (let i = 0; i < nextSyncablePosts.length; i++) {
+    const post = nextSyncablePosts[i];
     const prevEntry = prevPostsMap.get(post.id);
     if (
       forceFullSync ||
@@ -375,7 +383,7 @@ export async function syncShowroomStoreToFirestore(
   }
 
   // Delete removed TikTok posts
-  for (const prevPost of prevStore?.tiktok.posts ?? []) {
+  for (const prevPost of prevSyncablePosts) {
     const prevId = sanitizeDocId(prevPost.id, 'tt');
     if (!nextPostIds.has(prevId)) {
       try {
@@ -409,84 +417,77 @@ export async function resetFirestoreToDefaults(): Promise<void> {
   await syncShowroomStoreToFirestore(INITIAL_SHOWROOM_STORE, null, true);
 }
 
+export interface ShowroomSyncMeta {
+  hasConfig: boolean;
+  vehiclesLoaded: boolean;
+  postsLoaded: boolean;
+  allLoaded: boolean;
+  remoteVehicles: Vehicle[];
+}
+
+function logListenerError(err: unknown, op: OperationType, path: string): void {
+  console.warn(`Firestore listener error (${op} ${path}):`, err);
+}
+
 export function subscribeShowroomFromFirestore(
   fallbackStore: ShowroomStore,
-  includeAdminAccess: boolean,
-  onUpdate: (nextStore: ShowroomStore, hasRemoteShowroom: boolean) => void
+  onUpdate: (nextStore: ShowroomStore, meta: ShowroomSyncMeta) => void,
+  onError?: (err: unknown) => void
 ): Unsubscribe {
+  let configLoaded = false;
   let hasConfig = false;
-  let configData: {
-    branding?: BrandingSettings;
-    hero?: HeroPost;
-    tiktok?: Omit<TikTokSectionConfig, 'posts'>;
-    contact?: LocationContact;
-  } | null = null;
+  let configData: RemoteShowroomConfigData | null = null;
 
   let vehiclesLoaded = false;
   let remoteVehicles: Vehicle[] = [];
 
   let postsLoaded = false;
-  let remotePosts: (TikTokPost & { sortOrder: number })[] = [];
-
-  let remoteAdminEmails: string[] | undefined = fallbackStore.adminEmails;
+  let remotePosts: RemoteTikTokPostEntry[] = [];
 
   const emitIfReady = () => {
-    const hasAnyRemote = hasConfig || remoteVehicles.length > 0 || remotePosts.length > 0;
-    if (!hasAnyRemote) {
+    const merged = mergeShowroomSnapshotState({
+      fallbackStore,
+      catalogVehicles: INITIAL_SHOWROOM_STORE.vehicles,
+      hasConfig,
+      configData,
+      vehiclesLoaded,
+      remoteVehicles,
+      postsLoaded,
+      remotePosts,
+    });
+    if (!merged) {
+      if (configLoaded && vehiclesLoaded && postsLoaded) {
+        onUpdate(fallbackStore, {
+          hasConfig,
+          vehiclesLoaded,
+          postsLoaded,
+          allLoaded: true,
+          remoteVehicles,
+        });
+      }
       return;
     }
 
-    const base = fallbackStore;
-    const resolvedBranding = configData?.branding
-      ? {
-          ...base.branding,
-          ...configData.branding,
-          logoUrl:
-            resolvePublicAssetUrl(configData.branding.logoUrl) || base.branding.logoUrl,
-        }
-      : base.branding;
-    const resolvedHero = configData?.hero
-      ? {
-          ...base.hero,
-          ...configData.hero,
-          imageUrl: resolvePublicAssetUrl(configData.hero.imageUrl),
-          videoUrl:
-            resolvePublicAssetUrl(configData.hero.videoUrl) || base.hero.videoUrl,
-        }
-      : base.hero;
-
-    const merged: ShowroomStore = {
-      branding: resolvedBranding,
-      hero: resolvedHero,
-      vehicles: mergeRemoteVehiclesWithCatalog(remoteVehicles, INITIAL_SHOWROOM_STORE.vehicles),
-      tiktok: {
-        title: configData?.tiktok?.title ?? base.tiktok.title,
-        description: configData?.tiktok?.description ?? base.tiktok.description,
-        profileUrl: configData?.tiktok?.profileUrl ?? base.tiktok.profileUrl,
-        handle: configData?.tiktok?.handle ?? base.tiktok.handle,
-        posts:
-          hasConfig || postsLoaded
-            ? [...remotePosts]
-                .sort((a, b) => a.sortOrder - b.sortOrder)
-                .map(({ sortOrder: _sortOrder, ...post }) => post)
-            : base.tiktok.posts,
-      },
-      contact: configData?.contact ? { ...base.contact, ...configData.contact } : base.contact,
-      adminEmails: remoteAdminEmails,
-    };
-
-    onUpdate(merged, hasConfig);
+    onUpdate(merged, {
+      hasConfig,
+      vehiclesLoaded,
+      postsLoaded,
+      allLoaded: configLoaded && vehiclesLoaded && postsLoaded,
+      remoteVehicles,
+    });
   };
 
   const unsubConfig = onSnapshot(
     doc(db, 'config', 'showroom'),
     (snap) => {
+      configLoaded = true;
       hasConfig = snap.exists();
-      configData = snap.exists() ? (snap.data() as typeof configData) : null;
+      configData = snap.exists() ? (snap.data() as RemoteShowroomConfigData) : null;
       emitIfReady();
     },
     (err) => {
-      handleFirestoreError(err, OperationType.GET, 'config/showroom');
+      logListenerError(err, OperationType.GET, 'config/showroom');
+      onError?.(err);
     }
   );
 
@@ -528,7 +529,8 @@ export function subscribeShowroomFromFirestore(
       emitIfReady();
     },
     (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'vehicles');
+      logListenerError(err, OperationType.LIST, 'vehicles');
+      onError?.(err);
     }
   );
 
@@ -550,37 +552,40 @@ export function subscribeShowroomFromFirestore(
       emitIfReady();
     },
     (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'tiktokPosts');
+      logListenerError(err, OperationType.LIST, 'tiktokPosts');
+      onError?.(err);
     }
   );
-
-  let unsubAdminAccess: Unsubscribe | null = null;
-  if (includeAdminAccess) {
-    unsubAdminAccess = onSnapshot(
-      doc(db, 'config', 'adminAccess'),
-      (snap) => {
-        if (snap.exists()) {
-          const data = snap.data() as { adminEmails?: unknown };
-          if (Array.isArray(data.adminEmails)) {
-            remoteAdminEmails = data.adminEmails.filter(
-              (e): e is string => typeof e === 'string' && Boolean(e.trim())
-            );
-            emitIfReady();
-          }
-        }
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.GET, 'config/adminAccess');
-      }
-    );
-  }
 
   return () => {
     unsubConfig();
     unsubVehicles();
     unsubPosts();
-    if (unsubAdminAccess) unsubAdminAccess();
   };
+}
+
+export function subscribeAdminAccessFromFirestore(
+  onUpdate: (adminEmails: string[]) => void,
+  onError?: (err: unknown) => void
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, 'config', 'adminAccess'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as { adminEmails?: unknown };
+        if (Array.isArray(data.adminEmails)) {
+          const emails = data.adminEmails.filter(
+            (e): e is string => typeof e === 'string' && Boolean(e.trim())
+          );
+          onUpdate(emails);
+        }
+      }
+    },
+    (err) => {
+      logListenerError(err, OperationType.GET, 'config/adminAccess');
+      onError?.(err);
+    }
+  );
 }
 
 export async function submitInquiryToFirestore(input: {
