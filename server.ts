@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import express, { type Request, type Response } from 'express';
+import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,16 +13,6 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const TIKTOK_COVERS_DIR = path.join(DATA_DIR, 'tiktok-covers');
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
-const INQUIRIES_PATH = path.join(DATA_DIR, 'inquiries.json');
-
-const DEFAULT_ADMIN_EMAILS = ['alifcarimports@gmail.com'];
-const SESSION_COOKIE_NAME = 'alif_admin_session';
-const SESSION_SECRET =
-  process.env.SESSION_SECRET || crypto.createHash('sha256').update(DATA_DIR).digest('hex');
-
-async function ensureDataDir(): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-}
 
 async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
@@ -35,125 +25,6 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
     }
     throw err;
   }
-}
-
-async function writeJsonFile(filePath: string, data: unknown): Promise<void> {
-  await ensureDataDir();
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
-}
-
-async function getAuthorizedAdminEmails(): Promise<Set<string>> {
-  const allowed = new Set<string>(DEFAULT_ADMIN_EMAILS.map((e) => e.toLowerCase()));
-  if (process.env.ADMIN_EMAILS) {
-    for (const part of process.env.ADMIN_EMAILS.split(',')) {
-      const cleaned = part.trim().toLowerCase();
-      if (cleaned) allowed.add(cleaned);
-    }
-  }
-  try {
-    const store = await readJsonFile<{ adminEmails?: unknown }>(STORE_PATH);
-    if (store && Array.isArray(store.adminEmails)) {
-      for (const email of store.adminEmails) {
-        if (typeof email === 'string' && email.trim()) {
-          allowed.add(email.trim().toLowerCase());
-        }
-      }
-    }
-  } catch {
-    // Ignore read errors
-  }
-  return allowed;
-}
-
-function signSessionToken(email: string): string {
-  const exp = Date.now() + 1000 * 60 * 60 * 24 * 7; // 7 days
-  const payload = Buffer.from(JSON.stringify({ email, exp })).toString('base64url');
-  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
-  return `${payload}.${sig}`;
-}
-
-function parseCookies(cookieHeader: string | undefined): Record<string, string> {
-  const cookies: Record<string, string> = {};
-  if (!cookieHeader) return cookies;
-  for (const part of cookieHeader.split(';')) {
-    const eqIndex = part.indexOf('=');
-    if (eqIndex <= 0) continue;
-    const key = part.slice(0, eqIndex).trim();
-    const val = part.slice(eqIndex + 1).trim();
-    cookies[key] = decodeURIComponent(val);
-  }
-  return cookies;
-}
-
-function verifySessionToken(token: string | undefined): string | null {
-  if (!token) return null;
-  const parts = token.split('.');
-  if (parts.length !== 2) return null;
-  const [payload, sig] = parts;
-  const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
-  if (sig.length !== expectedSig.length) return null;
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
-    return null;
-  }
-  try {
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as {
-      email?: string;
-      exp?: number;
-    };
-    if (!decoded.email || !decoded.exp || decoded.exp < Date.now()) {
-      return null;
-    }
-    return decoded.email;
-  } catch {
-    return null;
-  }
-}
-
-async function getAuthenticatedAdminEmail(req: Request): Promise<string | null> {
-  const authHeader = req.headers.authorization;
-  let token: string | undefined;
-  if (typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
-    token = authHeader.slice(7).trim();
-  }
-  if (!token) {
-    const cookies = parseCookies(req.headers.cookie);
-    token = cookies[SESSION_COOKIE_NAME];
-  }
-  const email = verifySessionToken(token);
-  if (!email) return null;
-  const allowed = await getAuthorizedAdminEmails();
-  return allowed.has(email.toLowerCase()) ? email : null;
-}
-
-function isHttpsRequest(req: Request): boolean {
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  return req.secure || forwardedProto === 'https';
-}
-
-function setSessionCookie(req: Request, res: Response, token: string): void {
-  const secure = isHttpsRequest(req);
-  const parts = [
-    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
-    'Path=/',
-    'HttpOnly',
-    secure ? 'SameSite=None' : 'SameSite=Lax',
-    ...(secure ? ['Secure'] : []),
-    `Max-Age=${60 * 60 * 24 * 7}`,
-  ];
-  res.setHeader('Set-Cookie', parts.join('; '));
-}
-
-function clearSessionCookie(req: Request, res: Response): void {
-  const secure = isHttpsRequest(req);
-  const parts = [
-    `${SESSION_COOKIE_NAME}=`,
-    'Path=/',
-    'HttpOnly',
-    secure ? 'SameSite=None' : 'SameSite=Lax',
-    ...(secure ? ['Secure'] : []),
-    'Max-Age=0',
-  ];
-  res.setHeader('Set-Cookie', parts.join('; '));
 }
 
 const BROWSER_USER_AGENT =
@@ -542,35 +413,6 @@ async function startServer(): Promise<void> {
     }
   });
 
-  app.get('/api/auth/session', async (req, res) => {
-    const email = await getAuthenticatedAdminEmail(req);
-    res.json({ authenticated: Boolean(email), email });
-  });
-
-  app.post('/api/auth/login', async (req, res) => {
-    const rawEmail = req.body?.email;
-    if (typeof rawEmail !== 'string' || !rawEmail.trim()) {
-      res.status(400).json({ error: 'Please enter an admin email address.' });
-      return;
-    }
-    const normalized = rawEmail.trim().toLowerCase();
-    const allowed = await getAuthorizedAdminEmails();
-    if (!allowed.has(normalized)) {
-      res.status(403).json({
-        error: 'This email is not authorized for admin access.',
-      });
-      return;
-    }
-    const token = signSessionToken(normalized);
-    setSessionCookie(req, res, token);
-    res.json({ authenticated: true, email: normalized, token });
-  });
-
-  app.post('/api/auth/logout', (req, res) => {
-    clearSessionCookie(req, res);
-    res.json({ ok: true });
-  });
-
   app.get('/api/store', async (_req, res) => {
     try {
       const store = await readJsonFile<Record<string, unknown>>(STORE_PATH);
@@ -578,88 +420,6 @@ async function startServer(): Promise<void> {
     } catch (error) {
       console.error('Failed to read store:', error);
       res.status(500).json({ error: 'Unable to read showroom data.' });
-    }
-  });
-
-  app.put('/api/store', async (req, res) => {
-    try {
-      const adminEmail = await getAuthenticatedAdminEmail(req);
-      if (!adminEmail) {
-        res.status(401).json({ error: 'Admin email login required to save changes.' });
-        return;
-      }
-      const payload = req.body;
-      if (!payload || typeof payload !== 'object' || !Array.isArray(payload.vehicles)) {
-        res.status(400).json({ error: 'Invalid showroom payload.' });
-        return;
-      }
-      await writeJsonFile(STORE_PATH, payload);
-      res.json({ ok: true, updatedAt: new Date().toISOString() });
-    } catch (error) {
-      console.error('Failed to save store:', error);
-      res.status(500).json({ error: 'Unable to persist showroom data.' });
-    }
-  });
-
-  app.delete('/api/store', async (req, res) => {
-    try {
-      const adminEmail = await getAuthenticatedAdminEmail(req);
-      if (!adminEmail) {
-        res.status(401).json({ error: 'Admin email login required to reset showroom data.' });
-        return;
-      }
-      await fs.unlink(STORE_PATH).catch((err: NodeJS.ErrnoException) => {
-        if (err.code !== 'ENOENT') throw err;
-      });
-      res.json({ ok: true });
-    } catch (error) {
-      console.error('Failed to reset store:', error);
-      res.status(500).json({ error: 'Unable to reset showroom data.' });
-    }
-  });
-
-  app.get('/api/inquiries', async (req, res) => {
-    try {
-      const adminEmail = await getAuthenticatedAdminEmail(req);
-      if (!adminEmail) {
-        res.status(401).json({ error: 'Admin login required.' });
-        return;
-      }
-      const list = (await readJsonFile<unknown[]>(INQUIRIES_PATH)) ?? [];
-      res.json({ data: list });
-    } catch (error) {
-      console.error('Failed to read inquiries:', error);
-      res.status(500).json({ error: 'Unable to load inquiries.' });
-    }
-  });
-
-  app.post('/api/inquiries', async (req, res) => {
-    try {
-      const { name, phone, email, vehicleTitle, message } = req.body ?? {};
-      if (!name || typeof name !== 'string' || !name.trim()) {
-        res.status(400).json({ error: 'Name is required.' });
-        return;
-      }
-      if (!phone || typeof phone !== 'string' || !phone.trim()) {
-        res.status(400).json({ error: 'Phone number is required.' });
-        return;
-      }
-      const existing = (await readJsonFile<Record<string, unknown>[]>(INQUIRIES_PATH)) ?? [];
-      const entry = {
-        id: `inq_${Date.now()}`,
-        name: name.trim(),
-        phone: phone.trim(),
-        email: typeof email === 'string' ? email.trim() : '',
-        vehicleTitle: typeof vehicleTitle === 'string' ? vehicleTitle.trim() : '',
-        message: typeof message === 'string' ? message.trim() : '',
-        createdAt: new Date().toISOString(),
-      };
-      const updated = [entry, ...existing].slice(0, 100);
-      await writeJsonFile(INQUIRIES_PATH, updated);
-      res.status(201).json({ ok: true, data: entry });
-    } catch (error) {
-      console.error('Failed to save inquiry:', error);
-      res.status(500).json({ error: 'Unable to submit inquiry.' });
     }
   });
 

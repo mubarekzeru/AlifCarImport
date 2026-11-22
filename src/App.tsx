@@ -42,7 +42,11 @@ import {
   signInAdminWithEmailPassword,
   signInAdminWithGoogle,
 } from './utils/storeClient';
-import { startWebAdminSession, stopWebSessionWatcher } from './utils/webAdminSessionSync';
+import {
+  checkForceSignOutBySecurityConfig,
+  startWebAdminSession,
+  stopWebSessionWatcher,
+} from './utils/webAdminSessionSync';
 
 const INITIAL_FILTERS: VehicleFilters = {
   query: '',
@@ -429,8 +433,24 @@ export default function App() {
         ]);
         if (!active) return;
         if (allowed) {
+          const handleForcedSignOut = () => {
+            if (!active) return;
+            setAdminEmail(null);
+          };
+          const forcedOut = await checkForceSignOutBySecurityConfig(auth, app, user, {
+            onForcedSignOut: handleForcedSignOut,
+          });
+          if (!active) return;
+          if (forcedOut) {
+            stopWebSessionWatcher();
+            setAdminEmail(null);
+            setAuthReady(true);
+            return;
+          }
           setAdminEmail(user.email);
-          void startWebAdminSession(auth, app, user);
+          void startWebAdminSession(auth, app, user, {
+            onForcedSignOut: handleForcedSignOut,
+          });
           try {
             await ensureFirestoreSeeded(storeRef.current);
           } catch (err) {

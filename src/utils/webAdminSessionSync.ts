@@ -15,8 +15,14 @@ export const WEB_ADMIN_FIRESTORE_DB_ID =
   'ai-studio-alifcarportal-c5b73261-7322-4966-b5e2-59c51963e99b';
 const DEVICE_ID_KEY = 'alif_web_admin_device_id';
 
+export interface WebAdminSessionOptions {
+  onForcedSignOut?: () => void;
+}
+
 let unsubscribeSessionWatch: Unsubscribe | null = null;
+let unsubscribeSecurityWatch: Unsubscribe | null = null;
 let activeWatchedSessionKey: string | null = null;
+let watchGeneration = 0;
 
 export function sanitizeSessionIdPart(value: unknown): string {
   return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '');
@@ -26,6 +32,66 @@ export function buildWebAdminSessionId(uid: string, deviceId: string): string {
   const cleanUid = sanitizeSessionIdPart(uid).slice(0, 10) || 'admin';
   const cleanDev = sanitizeSessionIdPart(deviceId).slice(0, 12) || 'browser';
   return `web_${cleanUid}_${cleanDev}`;
+}
+
+export function extractFirestoreTimestampMillis(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (
+    typeof value === 'object' &&
+    'toMillis' in value &&
+    typeof (value as { toMillis?: unknown }).toMillis === 'function'
+  ) {
+    const millis = (value as { toMillis: () => number }).toMillis();
+    return Number.isFinite(millis) ? millis : null;
+  }
+  if (value instanceof Date) {
+    const millis = value.getTime();
+    return Number.isFinite(millis) ? millis : null;
+  }
+  if (
+    typeof value === 'object' &&
+    'seconds' in value &&
+    typeof (value as { seconds?: unknown }).seconds === 'number'
+  ) {
+    const seconds = (value as { seconds: number }).seconds;
+    const nanoseconds =
+      'nanoseconds' in value && typeof (value as { nanoseconds?: unknown }).nanoseconds === 'number'
+        ? (value as { nanoseconds: number }).nanoseconds
+        : 0;
+    const millis = seconds * 1000 + Math.floor(nanoseconds / 1_000_000);
+    return Number.isFinite(millis) ? millis : null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+export function parseAuthTimeMillis(authTime: unknown): number | null {
+  if (typeof authTime === 'number') {
+    return Number.isFinite(authTime) ? authTime : null;
+  }
+  if (authTime instanceof Date) {
+    const millis = authTime.getTime();
+    return Number.isFinite(millis) ? millis : null;
+  }
+  if (typeof authTime === 'string' && authTime.trim()) {
+    const millis = new Date(authTime).getTime();
+    return Number.isFinite(millis) ? millis : null;
+  }
+  return null;
+}
+
+export function shouldForceSignOutForSecurityTimestamp(
+  authTime: unknown,
+  forceSignOutBefore: unknown
+): boolean {
+  const authTimeMs = parseAuthTimeMillis(authTime);
+  const cutoffMs = extractFirestoreTimestampMillis(forceSignOutBefore);
+  if (authTimeMs === null || cutoffMs === null) {
+    return false;
+  }
+  return authTimeMs < cutoffMs;
 }
 
 export function detectBrowserDeviceName(userAgent?: string): string {
@@ -97,31 +163,104 @@ function generateAlertId(now: number): string {
 }
 
 export function stopWebSessionWatcher(): void {
+  watchGeneration += 1;
   if (unsubscribeSessionWatch) {
     unsubscribeSessionWatch();
     unsubscribeSessionWatch = null;
   }
+  if (unsubscribeSecurityWatch) {
+    unsubscribeSecurityWatch();
+    unsubscribeSecurityWatch = null;
+  }
   activeWatchedSessionKey = null;
+}
+
+async function evaluateSecurityForceSignOut(
+  auth: Auth,
+  user: User,
+  securityData: Record<string, unknown> | undefined,
+  options?: WebAdminSessionOptions
+): Promise<boolean> {
+  const forceSignOutBefore = securityData?.forceSignOutBefore;
+  if (extractFirestoreTimestampMillis(forceSignOutBefore) === null) {
+    return false;
+  }
+
+  try {
+    const activeUser = auth.currentUser ?? user;
+    const tokenResult = await activeUser.getIdTokenResult();
+    const authTimeMs = new Date(tokenResult.authTime).getTime();
+    if (shouldForceSignOutForSecurityTimestamp(authTimeMs, forceSignOutBefore)) {
+      stopWebSessionWatcher();
+      options?.onForcedSignOut?.();
+      await signOut(auth).catch(() => undefined);
+      return true;
+    }
+  } catch (err) {
+    console.warn('Unable to evaluate config/security forceSignOutBefore:', err);
+  }
+  return false;
+}
+
+/**
+ * Checks config/security.forceSignOutBefore against the signed-in user's ID token auth_time.
+ * Returns true if the user was signed out because their token predates a password change
+ * or global sign-out.
+ */
+export async function checkForceSignOutBySecurityConfig(
+  auth: Auth,
+  firebaseApp: FirebaseApp,
+  user: User | null | undefined,
+  options?: WebAdminSessionOptions
+): Promise<boolean> {
+  if (!user || !user.emailVerified) return false;
+  try {
+    const db = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+    const securitySnap = await getDoc(doc(db, 'config', 'security'));
+    if (!securitySnap.exists()) {
+      return false;
+    }
+    return await evaluateSecurityForceSignOut(auth, user, securitySnap.data(), options);
+  } catch (err) {
+    console.warn('Unable to read config/security document:', err);
+    return false;
+  }
 }
 
 /**
  * Silently reports an authorized website admin login to the shared Firestore database
  * so the Android Admin app can display active website sessions, show login alerts,
- * and remotely revoke website sessions. Adds no visible UI on the website.
+ * and remotely revoke website sessions or force sign-out on password changes.
+ * Adds no visible UI on the website.
  */
 export async function startWebAdminSession(
   auth: Auth,
   firebaseApp: FirebaseApp,
-  user: User | null | undefined
-): Promise<void> {
-  if (!user || !user.emailVerified) return;
+  user: User | null | undefined,
+  options?: WebAdminSessionOptions
+): Promise<boolean> {
+  if (!user || !user.emailVerified) return false;
 
   const deviceId = getOrCreateWebDeviceId().slice(0, 128);
   const sessionId = buildWebAdminSessionId(user.uid, deviceId);
   const watchKey = `${user.uid}:${sessionId}`;
+  const startGen = watchGeneration;
 
   try {
     const db = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+    const securityRef = doc(db, 'config', 'security');
+
+    // Enforce config/security.forceSignOutBefore before writing session or login alert docs
+    const forcedOutBeforeSync = await checkForceSignOutBySecurityConfig(
+      auth,
+      firebaseApp,
+      user,
+      options
+    );
+    if (forcedOutBeforeSync || startGen !== watchGeneration) {
+      return false;
+    }
+
     const deviceName = detectBrowserDeviceName();
     const email = (user.email || '').trim().slice(0, 254);
     const location = getFallbackLocation();
@@ -132,6 +271,7 @@ export async function startWebAdminSession(
 
     const sessionRef = doc(db, 'adminSessions', sessionId);
     const existingSnap = await getDoc(sessionRef);
+    if (startGen !== watchGeneration) return false;
 
     if (!existingSnap.exists()) {
       await setDoc(sessionRef, {
@@ -163,6 +303,8 @@ export async function startWebAdminSession(
       });
     }
 
+    if (startGen !== watchGeneration) return false;
+
     const alertFlagKey = `alif_web_alert_sent_${user.uid}_${user.metadata?.lastSignInTime || ''}`;
     let alertAlreadySent = false;
     try {
@@ -193,17 +335,28 @@ export async function startWebAdminSession(
       }
     }
 
-    // Live remote sign-out: if revoked from the Android app, sign out this browser immediately
-    if (activeWatchedSessionKey === watchKey && unsubscribeSessionWatch) {
-      return;
+    if (startGen !== watchGeneration) return false;
+
+    if (
+      activeWatchedSessionKey === watchKey &&
+      unsubscribeSessionWatch &&
+      unsubscribeSecurityWatch
+    ) {
+      return true;
     }
+
+    // Attach live watchers for per-session revocation and global password/security sign-out
     stopWebSessionWatcher();
+    const activeGen = watchGeneration;
     activeWatchedSessionKey = watchKey;
+
     unsubscribeSessionWatch = onSnapshot(
       sessionRef,
       (snap) => {
+        if (activeGen !== watchGeneration) return;
         if (snap.exists() && snap.data()?.status === 'revoked') {
           stopWebSessionWatcher();
+          options?.onForcedSignOut?.();
           void signOut(auth);
         }
       },
@@ -211,8 +364,22 @@ export async function startWebAdminSession(
         console.warn('Web admin session watcher error:', err);
       }
     );
+
+    unsubscribeSecurityWatch = onSnapshot(
+      securityRef,
+      (snap) => {
+        if (activeGen !== watchGeneration || !snap.exists()) return;
+        void evaluateSecurityForceSignOut(auth, user, snap.data(), options);
+      },
+      (err) => {
+        console.warn('Web admin security config watcher error:', err);
+      }
+    );
+
+    return true;
   } catch (err) {
     console.warn('Unable to sync website admin session:', err);
+    return true;
   }
 }
 
