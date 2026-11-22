@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ExternalLink, Film, Loader2, Play, X } from 'lucide-react';
-import { motion } from 'motion/react';
 import type { TikTokSectionConfig } from '../types/showroom';
 import {
   deriveTitleFromVideoDescription,
@@ -10,10 +9,11 @@ import {
   normalizeTikTokUrl,
 } from '../utils/inventory';
 import { fetchTikTokVideoMetadata } from '../utils/storeClient';
-import { ScrollReveal, SMOOTH_EASE } from './ScrollReveal';
+import { ScrollReveal } from './ScrollReveal';
 
 interface TikTokShowcaseProps {
   tiktok: TikTokSectionConfig;
+  loading?: boolean;
 }
 
 interface ResolvedPostMedia {
@@ -23,7 +23,7 @@ interface ResolvedPostMedia {
   loading?: boolean;
 }
 
-export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
+export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps) {
   const [activeEmbedId, setActiveEmbedId] = useState<string | null>(null);
   const [resolvedByPostId, setResolvedByPostId] = useState<Record<string, ResolvedPostMedia>>({});
   const [brokenCoverIds, setBrokenCoverIds] = useState<Record<string, boolean>>({});
@@ -154,9 +154,20 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
         </ScrollReveal>
 
         {activePosts.length === 0 ? (
-          <div className="border border-zinc-800 bg-[#141418] rounded-xl p-8 text-center text-sm text-zinc-400">
-            No TikTok video links added yet.
-          </div>
+          loading ? (
+            <div className="flex overflow-x-auto gap-2 sm:gap-4 pb-3">
+              {[1, 2, 3, 4].map((n) => (
+                <div
+                  key={n}
+                  className="shrink-0 w-[calc((100%-1rem)/3)] min-w-[112px] sm:w-[205px] lg:w-[235px] aspect-[9/15] rounded-xl bg-[#141418] border border-white/[0.08] animate-pulse"
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="border border-zinc-800 bg-[#141418] rounded-xl p-8 text-center text-sm text-zinc-400">
+              No TikTok video links added yet.
+            </div>
+          )
         ) : (
           <div className="space-y-3">
             {activePosts.length > 3 && (
@@ -175,7 +186,7 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
               data-testid="tiktok-carousel"
               className="flex overflow-x-auto snap-x snap-mandatory gap-2 sm:gap-4 pb-3 scroll-smooth"
             >
-              {activePosts.map((post, idx) => {
+              {activePosts.map((post) => {
                 const resolved = resolvedByPostId[post.id];
                 const targetUrl = normalizeTikTokUrl(post.tiktokUrl) || tiktok.profileUrl;
                 const videoId = extractTikTokVideoId(targetUrl) || resolved?.videoId || null;
@@ -188,11 +199,12 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
                   '';
 
                 const trimmedTitle = post.title.trim();
-                const displayTitle =
+                const derivedTitle =
                   (!trimmedTitle || trimmedTitle === 'New Imported Arrival Walkaround') &&
                   (post.caption.trim() || resolved?.title)
-                    ? deriveTitleFromVideoDescription(post.caption) || resolved?.title || post.title
-                    : post.title;
+                    ? deriveTitleFromVideoDescription(post.caption) || resolved?.title || trimmedTitle
+                    : trimmedTitle;
+                const displayTitle = derivedTitle || 'Alif Car Import Reel';
 
                 const cardWidthClass =
                   activePosts.length === 1
@@ -254,17 +266,9 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
                 );
 
                 return (
-                  <motion.article
+                  <article
                     key={post.id}
                     data-testid={`tiktok-card-${post.id}`}
-                    initial={{ opacity: 0, y: 28 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true, amount: 0.1 }}
-                    transition={{
-                      duration: 0.45,
-                      delay: Math.min((idx % 4) * 0.06, 0.22),
-                      ease: SMOOTH_EASE,
-                    }}
                     className={`group shrink-0 snap-start ${cardWidthClass} bg-[#141418] border border-white/[0.08] rounded-xl overflow-hidden transition-colors hover:border-white/25`}
                   >
                     <div
@@ -309,7 +313,7 @@ export function TikTokShowcase({ tiktok }: TikTokShowcaseProps) {
                         </a>
                       )}
                     </div>
-                  </motion.article>
+                  </article>
                 );
               })}
             </div>

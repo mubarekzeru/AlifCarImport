@@ -277,13 +277,35 @@ export async function syncCatalogVehiclesToFirestore(
   }
 }
 
+export async function deleteVehicleFromFirestore(vehicleId: string): Promise<void> {
+  const exactId = vehicleId.trim();
+  if (!exactId) return;
+  try {
+    await deleteDoc(doc(db, 'vehicles', exactId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `vehicles/${exactId}`);
+  }
+}
+
+export async function deleteTikTokPostFromFirestore(postId: string): Promise<void> {
+  const exactId = postId.trim();
+  if (!exactId) return;
+  try {
+    await deleteDoc(doc(db, 'tiktokPosts', exactId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `tiktokPosts/${exactId}`);
+  }
+}
+
 export async function syncShowroomStoreToFirestore(
   nextStore: ShowroomStore,
   prevStore?: ShowroomStore | null,
   forceFullSync = false
 ): Promise<void> {
   const prevVehiclesMap = new Map((prevStore?.vehicles ?? []).map((v) => [v.id, v]));
-  const nextVehicleIds = new Set(nextStore.vehicles.map((v) => sanitizeDocId(v.id, 'veh')));
+  const nextVehicleIds = new Set(
+    nextStore.vehicles.flatMap((v) => [v.id, sanitizeDocId(v.id, 'veh')])
+  );
 
   const prevSyncablePosts = filterSyncableTikTokPosts(prevStore?.tiktok.posts ?? []);
   const nextSyncablePosts = filterSyncableTikTokPosts(nextStore.tiktok.posts);
@@ -291,7 +313,9 @@ export async function syncShowroomStoreToFirestore(
   const prevPostsMap = new Map(
     prevSyncablePosts.map((p, idx) => [p.id, { post: p, index: idx }])
   );
-  const nextPostIds = new Set(nextSyncablePosts.map((p) => sanitizeDocId(p.id, 'tt')));
+  const nextPostIds = new Set(
+    nextSyncablePosts.flatMap((p) => [p.id, sanitizeDocId(p.id, 'tt')])
+  );
 
   const showroomConfigChanged =
     forceFullSync ||
@@ -352,14 +376,15 @@ export async function syncShowroomStoreToFirestore(
     }
   }
 
-  // Delete removed vehicles
+  // Delete removed vehicles using exact Firestore document ID
   for (const prevVehicle of prevStore?.vehicles ?? []) {
-    const prevId = sanitizeDocId(prevVehicle.id, 'veh');
-    if (!nextVehicleIds.has(prevId)) {
+    const exactId = prevVehicle.id.trim();
+    const sanitizedId = sanitizeDocId(prevVehicle.id, 'veh');
+    if (exactId && !nextVehicleIds.has(exactId) && !nextVehicleIds.has(sanitizedId)) {
       try {
-        await deleteDoc(doc(db, 'vehicles', prevId));
+        await deleteDoc(doc(db, 'vehicles', exactId));
       } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `vehicles/${prevId}`);
+        handleFirestoreError(err, OperationType.DELETE, `vehicles/${exactId}`);
       }
     }
   }
@@ -382,14 +407,15 @@ export async function syncShowroomStoreToFirestore(
     }
   }
 
-  // Delete removed TikTok posts
+  // Delete removed TikTok posts using exact Firestore document ID
   for (const prevPost of prevSyncablePosts) {
-    const prevId = sanitizeDocId(prevPost.id, 'tt');
-    if (!nextPostIds.has(prevId)) {
+    const exactId = prevPost.id.trim();
+    const sanitizedId = sanitizeDocId(prevPost.id, 'tt');
+    if (exactId && !nextPostIds.has(exactId) && !nextPostIds.has(sanitizedId)) {
       try {
-        await deleteDoc(doc(db, 'tiktokPosts', prevId));
+        await deleteDoc(doc(db, 'tiktokPosts', exactId));
       } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `tiktokPosts/${prevId}`);
+        handleFirestoreError(err, OperationType.DELETE, `tiktokPosts/${exactId}`);
       }
     }
   }
@@ -447,7 +473,6 @@ export function subscribeShowroomFromFirestore(
   const emitIfReady = () => {
     const merged = mergeShowroomSnapshotState({
       fallbackStore,
-      catalogVehicles: INITIAL_SHOWROOM_STORE.vehicles,
       hasConfig,
       configData,
       vehiclesLoaded,
@@ -499,7 +524,7 @@ export function subscribeShowroomFromFirestore(
         .map((d) => {
           const data = d.data() as Record<string, unknown>;
           return {
-            id: typeof data.id === 'string' ? data.id : d.id,
+            id: d.id,
             title: String(data.title ?? ''),
             make: String(data.make ?? ''),
             model: String(data.model ?? ''),
@@ -541,7 +566,7 @@ export function subscribeShowroomFromFirestore(
       remotePosts = snap.docs.map((d) => {
         const data = d.data() as Record<string, unknown>;
         return {
-          id: typeof data.id === 'string' ? data.id : d.id,
+          id: d.id,
           title: String(data.title ?? ''),
           caption: String(data.caption ?? ''),
           tiktokUrl: String(data.tiktokUrl ?? ''),

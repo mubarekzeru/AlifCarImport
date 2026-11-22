@@ -66,6 +66,8 @@ interface AdminDashboardProps {
     nextStore: ShowroomStore | ((prev: ShowroomStore) => ShowroomStore),
     immediate?: boolean
   ) => Promise<boolean>;
+  onDeleteVehicle?: (id: string) => Promise<boolean>;
+  onDeleteTikTokPost?: (id: string) => Promise<boolean>;
   onResetDefaults?: () => void;
   onPublishAndView: (sectionId?: string) => Promise<void>;
   onSignOut?: () => void;
@@ -81,6 +83,8 @@ export function AdminDashboard({
   saveError,
   onDismissSaveError,
   onUpdateStore,
+  onDeleteVehicle,
+  onDeleteTikTokPost,
   onPublishAndView,
   onSignOut,
 }: AdminDashboardProps) {
@@ -253,13 +257,17 @@ export function AdminDashboard({
   };
 
   const handleDeleteVehicle = (id: string) => {
-    void onUpdateStore(
-      (prev) => ({
-        ...prev,
-        vehicles: prev.vehicles.filter((v) => v.id !== id),
-      }),
-      true
-    );
+    if (onDeleteVehicle) {
+      void onDeleteVehicle(id);
+    } else {
+      void onUpdateStore(
+        (prev) => ({
+          ...prev,
+          vehicles: prev.vehicles.filter((v) => v.id !== id),
+        }),
+        true
+      );
+    }
     setConfirmDeleteId(null);
   };
 
@@ -358,16 +366,20 @@ export function AdminDashboard({
       return next;
     });
     setSelectedPublishedPostId((prev) => (prev === id ? null : prev));
-    void onUpdateStore(
-      (prev) => ({
-        ...prev,
-        tiktok: {
-          ...prev.tiktok,
-          posts: prev.tiktok.posts.filter((p) => p.id !== id),
-        },
-      }),
-      true
-    );
+    if (onDeleteTikTokPost) {
+      void onDeleteTikTokPost(id);
+    } else {
+      void onUpdateStore(
+        (prev) => ({
+          ...prev,
+          tiktok: {
+            ...prev.tiktok,
+            posts: prev.tiktok.posts.filter((p) => p.id !== id),
+          },
+        }),
+        true
+      );
+    }
   };
 
   const handleFetchTikTokPostMetadata = async (

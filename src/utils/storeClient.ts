@@ -9,21 +9,18 @@ import { app, auth, formatFirestoreUserMessage, googleProvider } from '../fireba
 import type { CustomerInquiry, ShowroomStore } from '../types/showroom';
 import {
   checkFirestoreHasShowroom,
+  deleteTikTokPostFromFirestore,
+  deleteVehicleFromFirestore,
   fetchAdminAllowlistFromFirestore,
   fetchInquiriesFromFirestore,
-  fetchRemoteVehicleSummariesFromFirestore,
   resetFirestoreToDefaults,
   submitInquiryToFirestore,
-  syncCatalogVehiclesToFirestore,
   syncShowroomStoreToFirestore,
 } from './firestoreStore';
 import { compressImageUrlToDataUrl } from './imageUpload';
 import {
   deriveTitleFromVideoDescription,
-  findLegacyDuplicateVehicleIds,
   isAuthorizedAdminEmail,
-  mergeRemoteVehiclesWithCatalog,
-  needsCatalogSyncToFirestore,
   normalizeTikTokUrl,
   resolveHeroVideoUrl,
   resolvePublicAssetUrl,
@@ -39,7 +36,7 @@ function normalizeStoreAssetPaths(store: ShowroomStore): ShowroomStore {
           ? v.galleryImages.map((u) => resolvePublicAssetUrl(u))
           : [],
       }))
-    : INITIAL_SHOWROOM_STORE.vehicles;
+    : [];
 
   return {
     ...store,
@@ -52,14 +49,16 @@ function normalizeStoreAssetPaths(store: ShowroomStore): ShowroomStore {
       imageUrl: resolvePublicAssetUrl(store.hero?.imageUrl),
       videoUrl: resolveHeroVideoUrl(store.hero?.videoUrl, INITIAL_SHOWROOM_STORE.hero.videoUrl),
     },
-    vehicles: mergeRemoteVehiclesWithCatalog(normalizedVehicles, INITIAL_SHOWROOM_STORE.vehicles),
+    vehicles: normalizedVehicles,
   };
 }
 
-const LOCAL_STORAGE_KEY = 'alif_car_import_store_v1';
+const LEGACY_LOCAL_STORAGE_KEY = 'alif_car_import_store_v1';
+const LOCAL_STORAGE_KEY = 'alif_car_import_store_v2';
 
 export function cacheShowroomStoreLocally(store: ShowroomStore): void {
   try {
+    localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(store));
   } catch {
     // Ignore local cache quota overflow; Firestore is the primary store
@@ -68,6 +67,7 @@ export function cacheShowroomStoreLocally(store: ShowroomStore): void {
 
 export function readCachedShowroomStore(): ShowroomStore | null {
   try {
+    localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
     const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (!cached) return null;
     const parsed = JSON.parse(cached) as ShowroomStore;
@@ -216,8 +216,6 @@ export async function ensureFirestoreSeeded(
   seedStore: ShowroomStore,
   snapshotMeta?: {
     hasConfig: boolean;
-    vehiclesLoaded: boolean;
-    remoteVehicles: Array<{ id: string; title: string }>;
   }
 ): Promise<void> {
   if (!auth.currentUser) return;
@@ -225,18 +223,6 @@ export async function ensureFirestoreSeeded(
     snapshotMeta !== undefined ? snapshotMeta.hasConfig : await checkFirestoreHasShowroom();
   if (!hasRemote) {
     await syncShowroomStoreToFirestore(seedStore, null, true);
-    return;
-  }
-  const existingVehicles =
-    snapshotMeta !== undefined && snapshotMeta.vehiclesLoaded
-      ? snapshotMeta.remoteVehicles
-      : await fetchRemoteVehicleSummariesFromFirestore();
-  if (needsCatalogSyncToFirestore(existingVehicles, INITIAL_SHOWROOM_STORE.vehicles)) {
-    const legacyDuplicateIds = findLegacyDuplicateVehicleIds(
-      existingVehicles,
-      INITIAL_SHOWROOM_STORE.vehicles
-    );
-    await syncCatalogVehiclesToFirestore(INITIAL_SHOWROOM_STORE.vehicles, legacyDuplicateIds);
   }
 }
 
@@ -253,23 +239,6 @@ function isStaticGitHubPagesHost(): boolean {
 }
 
 export async function loadShowroomStore(): Promise<ShowroomStore> {
-  // Check Express dev server store first if present (helpful for initial seeding before Firebase has docs)
-  if (!isStaticGitHubPagesHost()) {
-    try {
-      const response = await fetch('/api/store', { credentials: 'same-origin' });
-      if (response.ok) {
-        const json = (await response.json()) as { initialized?: boolean; data?: ShowroomStore | null };
-        if (json.initialized && json.data && Array.isArray(json.data.vehicles)) {
-          const normalized = normalizeStoreAssetPaths(json.data);
-          cacheShowroomStoreLocally(normalized);
-          return normalized;
-        }
-      }
-    } catch {
-      // Expected on static hosting without Express backend
-    }
-  }
-
   return readCachedShowroomStore() ?? INITIAL_SHOWROOM_STORE;
 }
 
@@ -285,6 +254,38 @@ export async function saveShowroomStore(
     await syncShowroomStoreToFirestore(store, prevStore, false);
     // Only update the browser's local cache AFTER Firestore confirms the cloud write
     cacheShowroomStoreLocally(store);
+  } catch (err) {
+    throw new Error(formatFirestoreUserMessage(err));
+  }
+}
+
+export async function deleteVehicleFromStore(
+  vehicleId: string,
+  nextStore: ShowroomStore
+): Promise<void> {
+  if (!auth.currentUser) {
+    throw new Error('Please sign in with an authorized admin account to delete vehicles.');
+  }
+
+  try {
+    await deleteVehicleFromFirestore(vehicleId);
+    cacheShowroomStoreLocally(nextStore);
+  } catch (err) {
+    throw new Error(formatFirestoreUserMessage(err));
+  }
+}
+
+export async function deleteTikTokPostFromStore(
+  postId: string,
+  nextStore: ShowroomStore
+): Promise<void> {
+  if (!auth.currentUser) {
+    throw new Error('Please sign in with an authorized admin account to remove TikTok videos.');
+  }
+
+  try {
+    await deleteTikTokPostFromFirestore(postId);
+    cacheShowroomStoreLocally(nextStore);
   } catch (err) {
     throw new Error(formatFirestoreUserMessage(err));
   }

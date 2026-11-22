@@ -43,8 +43,8 @@ export function Navbar({
   const navItems = [
     { label: 'Home', id: 'top' },
     { label: 'Collection', id: 'inventory' },
-    { label: 'Process', id: 'how-it-works' },
     { label: 'Reels', id: 'tiktok-showcase' },
+    { label: 'Process', id: 'how-it-works' },
     { label: 'Contact', id: 'location-contact' },
   ];
 

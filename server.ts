@@ -12,20 +12,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const TIKTOK_COVERS_DIR = path.join(DATA_DIR, 'tiktok-covers');
-const STORE_PATH = path.join(DATA_DIR, 'store.json');
-
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    const raw = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(raw) as T;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === 'ENOENT') {
-      return null;
-    }
-    throw err;
-  }
-}
 
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -410,16 +396,6 @@ async function startServer(): Promise<void> {
             ? error.message
             : 'Unable to fetch video description and cover image from TikTok.',
       });
-    }
-  });
-
-  app.get('/api/store', async (_req, res) => {
-    try {
-      const store = await readJsonFile<Record<string, unknown>>(STORE_PATH);
-      res.json({ initialized: Boolean(store), data: store });
-    } catch (error) {
-      console.error('Failed to read store:', error);
-      res.status(500).json({ error: 'Unable to read showroom data.' });
     }
   });
 

@@ -36,8 +36,9 @@ import {
 } from './utils/inventory';
 import {
   cacheShowroomStoreLocally,
+  deleteTikTokPostFromStore,
+  deleteVehicleFromStore,
   ensureFirestoreSeeded,
-  loadShowroomStore,
   logoutAdmin,
   readCachedShowroomStore,
   resetShowroomStore,
@@ -401,12 +402,10 @@ export default function App() {
   const location = useLocation();
   const isAdminRoute = location.pathname.startsWith('/admin');
 
-  const initialStore = useMemo(
-    () => readCachedShowroomStore() ?? INITIAL_SHOWROOM_STORE,
-    []
-  );
+  const cachedInitialStore = useMemo(() => readCachedShowroomStore(), []);
+  const initialStore = cachedInitialStore ?? INITIAL_SHOWROOM_STORE;
   const [store, setStore] = useState<ShowroomStore>(initialStore);
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(Boolean(cachedInitialStore));
   const [authReady, setAuthReady] = useState(false);
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -423,14 +422,6 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    loadShowroomStore().then((data) => {
-      if (!active) return;
-      if (!lastSyncedStoreRef.current) {
-        storeRef.current = data;
-        setStore(data);
-      }
-      setLoaded(true);
-    });
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (!active) return;
@@ -501,9 +492,12 @@ export default function App() {
         }
         setRemoteSyncMeta(meta);
         setStore(mergedWithAdminEmails);
-        setLoaded(true);
+        if (meta.vehiclesLoaded || meta.allLoaded) {
+          setLoaded(true);
+        }
       },
       (err) => {
+        setLoaded(true);
         setSaveState('error');
         setSaveError(formatFirestoreUserMessage(err));
       }
@@ -614,6 +608,73 @@ export default function App() {
       void persistStoreNow(storeRef.current, lastSyncedStoreRef.current ?? prevBeforeEdit);
     }, 800);
     return true;
+  };
+
+  const handleDeleteVehicleDirect = async (vehicleId: string): Promise<boolean> => {
+    if (!adminEmail) return false;
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const prevStore = storeRef.current;
+    const nextStore: ShowroomStore = {
+      ...prevStore,
+      vehicles: prevStore.vehicles.filter((v) => v.id !== vehicleId),
+    };
+    storeRef.current = nextStore;
+    setStore(nextStore);
+    setSaveState('saving');
+    setSaveError(null);
+    try {
+      await deleteVehicleFromStore(vehicleId, nextStore);
+      lastSyncedStoreRef.current = nextStore;
+      setSaveState('saved');
+      return true;
+    } catch (err) {
+      storeRef.current = prevStore;
+      setStore(prevStore);
+      setSaveState('error');
+      setSaveError(err instanceof Error ? err.message : 'Unable to delete vehicle from Firebase.');
+      return false;
+    }
+  };
+
+  const handleDeleteTikTokPostDirect = async (postId: string): Promise<boolean> => {
+    if (!adminEmail) return false;
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const prevStore = storeRef.current;
+    const targetPost = prevStore.tiktok.posts.find((p) => p.id === postId);
+    const nextStore: ShowroomStore = {
+      ...prevStore,
+      tiktok: {
+        ...prevStore.tiktok,
+        posts: prevStore.tiktok.posts.filter((p) => p.id !== postId),
+      },
+    };
+    storeRef.current = nextStore;
+    setStore(nextStore);
+    // Unsaved blank drafts never existed in Firestore; removing them locally requires 0 writes
+    if (!targetPost?.tiktokUrl?.trim()) {
+      cacheShowroomStoreLocally(nextStore);
+      return true;
+    }
+    setSaveState('saving');
+    setSaveError(null);
+    try {
+      await deleteTikTokPostFromStore(postId, nextStore);
+      lastSyncedStoreRef.current = nextStore;
+      setSaveState('saved');
+      return true;
+    } catch (err) {
+      storeRef.current = prevStore;
+      setStore(prevStore);
+      setSaveState('error');
+      setSaveError(err instanceof Error ? err.message : 'Unable to remove TikTok video from Firebase.');
+      return false;
+    }
   };
 
   const handleResetDefaults = async () => {
@@ -1119,13 +1180,16 @@ export default function App() {
                       </div>
                     </section>
 
+                    <TikTokShowcase
+                      tiktok={store.tiktok}
+                      loading={!remoteSyncMeta?.postsLoaded && !loaded}
+                    />
+
                     <HowItWorksSection
                       brands={filterOptions.makes}
                       onStartOrder={() => navigateToSection('location-contact')}
                       onBrowseCollection={() => navigateToSection('inventory-grid')}
                     />
-
-                    <TikTokShowcase tiktok={store.tiktok} />
 
                     <LocationContactSection
                       contact={store.contact}
@@ -1176,6 +1240,8 @@ export default function App() {
                         setSaveState('idle');
                       }}
                       onUpdateStore={handleUpdateStore}
+                      onDeleteVehicle={handleDeleteVehicleDirect}
+                      onDeleteTikTokPost={handleDeleteTikTokPostDirect}
                       onResetDefaults={handleResetDefaults}
                       onSignOut={() => void handleLogoutAdmin()}
                       onPublishAndView={async (sectionId) => {

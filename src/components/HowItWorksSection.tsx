@@ -57,7 +57,7 @@ export function HowItWorksSection({
     new Set(brands.map((b) => b.trim().toUpperCase()).filter(Boolean))
   );
   const displayBrands =
-    normalizedBrands.length >= 4 ? normalizedBrands : FALLBACK_PARTNER_BRANDS;
+    normalizedBrands.length > 0 ? normalizedBrands : FALLBACK_PARTNER_BRANDS;
 
   return (
     <section

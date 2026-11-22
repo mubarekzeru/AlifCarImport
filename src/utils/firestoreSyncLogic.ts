@@ -7,7 +7,7 @@ import type {
   TikTokSectionConfig,
   Vehicle,
 } from '../types/showroom';
-import { mergeRemoteVehiclesWithCatalog, resolvePublicAssetUrl } from './inventory';
+import { resolvePublicAssetUrl } from './inventory';
 
 export interface RemoteShowroomConfigData {
   branding?: BrandingSettings;
@@ -22,7 +22,6 @@ export interface RemoteTikTokPostEntry extends TikTokPost {
 
 export interface ShowroomSnapshotInput {
   fallbackStore: ShowroomStore;
-  catalogVehicles: Vehicle[];
   hasConfig: boolean;
   configData: RemoteShowroomConfigData | null;
   vehiclesLoaded: boolean;
@@ -35,13 +34,14 @@ export interface ShowroomSnapshotInput {
 /**
  * Merges incoming Firestore collection snapshots into a ShowroomStore without
  * wiping vehicles or TikTok posts that have not finished loading yet.
+ * Once a collection finishes loading from Firestore, it is strictly authoritative
+ * so deletions made in Admin are always reflected on the website.
  */
 export function mergeShowroomSnapshotState(
   input: ShowroomSnapshotInput
 ): ShowroomStore | null {
   const {
     fallbackStore: base,
-    catalogVehicles,
     hasConfig,
     configData,
     vehiclesLoaded,
@@ -76,9 +76,7 @@ export function mergeShowroomSnapshotState(
       }
     : base.hero;
 
-  const resolvedVehicles = vehiclesLoaded
-    ? mergeRemoteVehiclesWithCatalog(remoteVehicles, catalogVehicles)
-    : base.vehicles;
+  const resolvedVehicles = vehiclesLoaded ? remoteVehicles : base.vehicles;
 
   const resolvedPosts = postsLoaded
     ? [...remotePosts]
