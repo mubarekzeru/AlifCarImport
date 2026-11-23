@@ -82,15 +82,16 @@ export function HowItWorksSection({
             </p>
           </ScrollReveal>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-            {IMPORT_STEPS.map((item, idx) => {
+          <ScrollReveal
+            y={10}
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5"
+          >
+            {IMPORT_STEPS.map((item) => {
               const StepIcon = item.Icon;
               return (
-                <ScrollReveal
+                <div
                   key={item.step}
-                  y={22}
-                  delay={idx * 0.05}
-                  className="bg-[#0d0d11] border border-white/[0.07] hover:border-[#E11D2A]/40 rounded-2xl p-6 space-y-4 transition-colors"
+                  className="bg-[#0d0d11] border border-white/[0.07] hover:border-[#E11D2A]/40 rounded-2xl p-6 space-y-4 transition-[transform,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-0.5"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <span className="w-10 h-10 rounded-xl bg-[#E11D2A]/12 border border-[#E11D2A]/25 text-[#E11D2A] inline-flex items-center justify-center shrink-0">
@@ -109,10 +110,10 @@ export function HowItWorksSection({
                       {item.description}
                     </p>
                   </div>
-                </ScrollReveal>
+                </div>
               );
             })}
-          </div>
+          </ScrollReveal>
         </div>
 
         {/* Trusted Partners Wordmark Band */}

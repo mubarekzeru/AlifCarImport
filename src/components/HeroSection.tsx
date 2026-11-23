@@ -112,11 +112,14 @@ export function HeroSection({
     if (typeof IntersectionObserver !== 'undefined') {
       observer = new IntersectionObserver(
         (entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) {
+          const isVisible = entries.some((entry) => entry.isIntersecting);
+          if (isVisible) {
             tryPlay();
+          } else if (!video.paused) {
+            video.pause();
           }
         },
-        { threshold: 0.1 }
+        { threshold: 0.05 }
       );
       observer.observe(video);
     }
@@ -191,9 +194,9 @@ export function HeroSection({
       {/* Brand Lockup & Editorial Composition resting cleanly over the lower hero video */}
       <div className="relative z-10 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-12 sm:pt-28 sm:pb-24">
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.65, ease: [0.22, 1, 0.36, 1] }}
+          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
           className="max-w-2xl space-y-5"
         >
           <div className="flex items-center gap-4 sm:gap-5">
@@ -237,8 +240,8 @@ export function HeroSection({
         className="hidden md:flex flex-col items-center gap-2 absolute bottom-7 left-1/2 -translate-x-1/2 z-10 text-zinc-400 hover:text-white transition-colors cursor-pointer"
       >
         <span className="text-[11px] font-medium tracking-wide">Scroll to explore</span>
-        <span className="w-5 h-8 rounded-full border border-white/25 flex items-start justify-center p-1.5">
-          <span className="w-1 h-2 rounded-full bg-[#E11D2A] animate-bounce" />
+        <span className="w-5 h-8 rounded-full border border-white/25 flex items-start justify-center p-1.5 overflow-hidden">
+          <span className="w-1 h-2 rounded-full bg-[#E11D2A] animate-scroll-dot" />
         </span>
       </button>
     </section>

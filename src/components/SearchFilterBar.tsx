@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Car, ChevronDown, RotateCcw, Search, X } from 'lucide-react';
-import { motion } from 'motion/react';
 import type { Vehicle, VehicleFilters } from '../types/showroom';
+import { ScrollReveal } from './ScrollReveal';
 
 interface SearchFilterBarProps {
   filters: VehicleFilters;
@@ -208,11 +208,9 @@ export function SearchFilterBar({
     .slice(0, 8);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 26 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 'some' }}
-      transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
+    <ScrollReveal
+      y={10}
+      duration={0.4}
       className="bg-[#111115] border border-white/[0.08] rounded-2xl p-3.5 sm:p-5 shadow-2xl space-y-3.5"
     >
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
@@ -396,6 +394,6 @@ export function SearchFilterBar({
           </button>
         )}
       </div>
-    </motion.div>
+    </ScrollReveal>
   );
 }

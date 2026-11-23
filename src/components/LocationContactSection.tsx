@@ -197,7 +197,7 @@ export function LocationContactSection({
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label={`${companyName} on ${item.label}`}
-                  className="group bg-[#0d0d11] hover:bg-[#131319] border border-white/[0.08] hover:border-white/25 rounded-2xl p-5 sm:p-6 transition-all flex flex-col justify-between gap-5"
+                  className="group bg-[#0d0d11] hover:bg-[#131319] border border-white/[0.08] hover:border-white/25 rounded-2xl p-5 sm:p-6 transition-[transform,background-color,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-0.5 flex flex-col justify-between gap-5"
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-center gap-3.5 min-w-0">

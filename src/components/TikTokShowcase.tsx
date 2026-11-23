@@ -184,7 +184,7 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
             <div
               ref={trackRef}
               data-testid="tiktok-carousel"
-              className="flex overflow-x-auto snap-x snap-mandatory gap-2 sm:gap-4 pb-3 scroll-smooth"
+              className="flex overflow-x-auto overscroll-x-contain snap-x snap-mandatory gap-2 sm:gap-4 pb-3 scroll-smooth"
             >
               {activePosts.map((post) => {
                 const resolved = resolvedByPostId[post.id];
@@ -269,7 +269,7 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
                   <article
                     key={post.id}
                     data-testid={`tiktok-card-${post.id}`}
-                    className={`group shrink-0 snap-start ${cardWidthClass} bg-[#141418] border border-white/[0.08] rounded-xl overflow-hidden transition-colors hover:border-white/25`}
+                    className={`group shrink-0 snap-start ${cardWidthClass} bg-[#141418] border border-white/[0.08] rounded-xl overflow-hidden transition-[transform,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1 hover:border-white/25 hover:shadow-[0_14px_30px_rgba(0,0,0,0.45)]`}
                   >
                     <div
                       data-testid={`tiktok-media-${post.id}`}

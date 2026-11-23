@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ArrowLeft, Eye, EyeOff, Lock, Mail } from 'lucide-react';
-import { AnimatePresence, MotionConfig, motion } from 'motion/react';
+import { MotionConfig } from 'motion/react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AdminDashboard } from './components/AdminDashboard';
 import { Footer } from './components/Footer';
@@ -910,16 +910,8 @@ export default function App() {
           />
         )}
 
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={location.pathname}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="flex-1 flex flex-col"
-          >
-            <Routes location={location}>
+        <div className="flex-1 flex flex-col">
+          <Routes location={location}>
               <Route
                 path="/"
                 element={
@@ -1272,10 +1264,9 @@ export default function App() {
                 }
               />
 
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </motion.div>
-        </AnimatePresence>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
 
         {!isAdminRoute && (
           <Footer

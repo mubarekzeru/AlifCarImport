@@ -1,7 +1,6 @@
 import { ALIF_DEFAULT_LOGO } from '../data/seedData';
 import type { BrandingSettings, LocationContact, TikTokSectionConfig } from '../types/showroom';
 import { getConfiguredSocialLinks, resolvePublicAssetUrl } from '../utils/inventory';
-import { ScrollReveal } from './ScrollReveal';
 import { SocialMediaIconRow } from './SocialIcons';
 
 interface FooterProps {
@@ -46,7 +45,7 @@ export function Footer({ branding, contact, tiktok }: FooterProps) {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 pb-8 sm:pt-16 sm:pb-10">
         <div>
           {/* Brand Column + Circular Social Buttons */}
-          <ScrollReveal y={20} className="space-y-5">
+          <div className="space-y-5">
             <div className="flex items-center gap-3.5">
               {(branding.logoUrl || ALIF_DEFAULT_LOGO) && (
                 <img
@@ -80,7 +79,7 @@ export function Footer({ branding, contact, tiktok }: FooterProps) {
                 />
               </div>
             )}
-          </ScrollReveal>
+          </div>
         </div>
 
         <div className="mt-12 pt-6 border-t border-white/[0.07] text-center text-xs text-zinc-500">

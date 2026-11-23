@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Car, Cog, Fuel, Gauge } from 'lucide-react';
-import { motion } from 'motion/react';
 import type { Vehicle } from '../types/showroom';
 import {
   formatPrice,
@@ -15,9 +14,8 @@ interface VehicleCardProps {
   onSelect: (vehicle: Vehicle) => void;
 }
 
-export function VehicleCard({ vehicle, index = 0, onSelect }: VehicleCardProps) {
+export function VehicleCard({ vehicle, onSelect }: VehicleCardProps) {
   const modelDisplay = formatVehicleTileModel(vehicle);
-  const staggerIndex = typeof index === 'number' ? index : 0;
 
   const imageCandidates = useMemo(
     () => getPublicAssetFallbackUrls(vehicle.imageUrl),
@@ -40,18 +38,9 @@ export function VehicleCard({ vehicle, index = 0, onSelect }: VehicleCardProps) 
   ].filter((item): item is { key: string; value: string; Icon: typeof Gauge } => Boolean(item));
 
   return (
-    <motion.article
+    <article
       data-testid={`vehicle-card-${vehicle.id}`}
-      initial={{ opacity: 0, y: 20 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      whileHover={{ y: -3, transition: { duration: 0.22, ease: [0.16, 1, 0.3, 1] } }}
-      viewport={{ once: true, amount: 'some' }}
-      transition={{
-        duration: 0.38,
-        delay: Math.min(staggerIndex * 0.04, 0.3),
-        ease: [0.22, 1, 0.36, 1],
-      }}
-      className="group bg-[#111115] border border-white/[0.08] hover:border-white/25 rounded-xl sm:rounded-2xl overflow-hidden transition-colors duration-300"
+      className="group bg-[#111115] border border-white/[0.08] hover:border-white/25 rounded-xl sm:rounded-2xl overflow-hidden transition-[transform,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1 hover:shadow-[0_18px_38px_rgba(0,0,0,0.45)]"
     >
       <button
         type="button"
@@ -128,6 +117,6 @@ export function VehicleCard({ vehicle, index = 0, onSelect }: VehicleCardProps) 
           </div>
         </div>
       </button>
-    </motion.article>
+    </article>
   );
 }
