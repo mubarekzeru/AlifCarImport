@@ -329,15 +329,26 @@ export function Navbar({
                       ))}
                     </ul>
 
-                    <a
-                      href={whatsappCartHref}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full h-9 inline-flex items-center justify-center gap-2 px-3 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-full transition-colors"
-                    >
-                      <MessageCircle className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Complete Order via WhatsApp</span>
-                    </a>
+                    {whatsappCartHref !== '#contact' ? (
+                      <a
+                        href={whatsappCartHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full h-9 inline-flex items-center justify-center gap-2 px-3 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-full transition-colors"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Complete Order via WhatsApp</span>
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleNavClick('location-contact')}
+                        className="w-full h-9 inline-flex items-center justify-center gap-2 px-3 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs font-semibold rounded-full transition-colors cursor-pointer"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Contact Showroom to Order</span>
+                      </button>
+                    )}
                   </>
                 )}
               </motion.div>

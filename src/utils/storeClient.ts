@@ -55,24 +55,99 @@ function normalizeStoreAssetPaths(store: ShowroomStore): ShowroomStore {
 
 const LEGACY_LOCAL_STORAGE_KEY = 'alif_car_import_store_v1';
 const LOCAL_STORAGE_KEY = 'alif_car_import_store_v2';
+const CONFIG_LOCAL_STORAGE_KEY = 'alif_car_import_config_v1';
 
-export function cacheShowroomStoreLocally(store: ShowroomStore): void {
+interface CachedShowroomConfig {
+  branding: ShowroomStore['branding'];
+  hero: ShowroomStore['hero'];
+  tiktok: Omit<ShowroomStore['tiktok'], 'posts'>;
+  contact: ShowroomStore['contact'];
+}
+
+export function cacheShowroomConfigLocally(store: ShowroomStore): void {
   try {
     localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
+    const lightweightConfig: CachedShowroomConfig = {
+      branding: store.branding,
+      hero: store.hero,
+      tiktok: {
+        title: store.tiktok.title,
+        description: store.tiktok.description,
+        profileUrl: store.tiktok.profileUrl,
+        handle: store.tiktok.handle,
+      },
+      contact: store.contact,
+    };
+    localStorage.setItem(CONFIG_LOCAL_STORAGE_KEY, JSON.stringify(lightweightConfig));
+  } catch {
+    // Ignore local storage errors
+  }
+}
+
+export function cacheShowroomStoreLocally(store: ShowroomStore): void {
+  // Always persist lightweight Contact, Social Media, Location & Branding (< 2 KB)
+  // so mobile/web updates never get lost if base64 vehicle images exceed the 5 MB quota.
+  cacheShowroomConfigLocally(store);
+  try {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(store));
   } catch {
-    // Ignore local cache quota overflow; Firestore is the primary store
+    // Remove stale full-store cache if quota is exceeded so old contact/vehicles never stick
+    try {
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+function readCachedShowroomConfig(): CachedShowroomConfig | null {
+  try {
+    const raw = localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CachedShowroomConfig>;
+    if (parsed && parsed.contact && typeof parsed.contact === 'object') {
+      return parsed as CachedShowroomConfig;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
 export function readCachedShowroomStore(): ShowroomStore | null {
   try {
     localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
+    const cachedConfig = readCachedShowroomConfig();
     const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (!cached) return null;
-    const parsed = JSON.parse(cached) as ShowroomStore;
-    if (parsed && Array.isArray(parsed.vehicles)) {
-      return normalizeStoreAssetPaths(parsed);
+    if (cached) {
+      const parsed = JSON.parse(cached) as ShowroomStore;
+      if (parsed && Array.isArray(parsed.vehicles)) {
+        const merged: ShowroomStore = cachedConfig
+          ? {
+              ...parsed,
+              branding: cachedConfig.branding ?? parsed.branding,
+              hero: cachedConfig.hero ?? parsed.hero,
+              tiktok: {
+                ...(cachedConfig.tiktok ?? parsed.tiktok),
+                posts: parsed.tiktok?.posts ?? [],
+              },
+              contact: cachedConfig.contact,
+            }
+          : parsed;
+        return normalizeStoreAssetPaths(merged);
+      }
+    }
+    if (cachedConfig) {
+      return normalizeStoreAssetPaths({
+        ...INITIAL_SHOWROOM_STORE,
+        branding: cachedConfig.branding ?? INITIAL_SHOWROOM_STORE.branding,
+        hero: cachedConfig.hero ?? INITIAL_SHOWROOM_STORE.hero,
+        tiktok: {
+          ...(cachedConfig.tiktok ?? INITIAL_SHOWROOM_STORE.tiktok),
+          posts: [],
+        },
+        contact: cachedConfig.contact,
+      });
     }
     return null;
   } catch {
@@ -304,6 +379,7 @@ export async function resetShowroomStore(): Promise<ShowroomStore> {
 
   try {
     localStorage.removeItem(LOCAL_STORAGE_KEY);
+    localStorage.removeItem(CONFIG_LOCAL_STORAGE_KEY);
   } catch {
     // Ignore
   }

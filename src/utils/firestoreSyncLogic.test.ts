@@ -6,7 +6,9 @@ import {
   didTikTokPostChange,
   filterSyncableTikTokPosts,
   mergeShowroomSnapshotState,
+  resolveRemoteContact,
 } from './firestoreSyncLogic';
+import { getConfiguredSocialLinks, normalizeExternalUrl } from './inventory';
 
 const SAMPLE_VEHICLE: Vehicle = {
   id: 'song-plus',
@@ -137,6 +139,155 @@ test('mergeShowroomSnapshotState respects deleted vehicles and never re-injects 
   assert.ok(afterDeleteAll);
   assert.deepEqual(afterDeleteAll.vehicles, []);
   assert.equal(afterDeleteAll.tiktok.posts.length, 1);
+});
+
+test('mergeShowroomSnapshotState treats mobile config/showroom contact & social updates as strictly authoritative (clears omitted socials)', () => {
+  const staleFallback = {
+    ...INITIAL_SHOWROOM_STORE,
+    contact: {
+      addressLine: 'Old Street',
+      cityCountry: 'Old City',
+      hours: 'Old Hours',
+      phone: '+251976011111',
+      whatsapp: '+251976011111',
+      telegram: 'Alif_Car_Import',
+      instagram: '@alif_car_import',
+      facebook: 'OldFacebook',
+      x: '@oldx',
+      email: 'info@alifcar.com',
+      mapsUrl: 'https://maps.google.com/?q=Old',
+      landmarkNote: 'Old Landmark',
+    },
+  };
+
+  // Mobile app updates contact & location and omits optional social keys (telegram, instagram, facebook, x)
+  const merged = mergeShowroomSnapshotState({
+    fallbackStore: staleFallback,
+    hasConfig: true,
+    configData: {
+      contact: {
+        addressLine: 'Bole Road Showroom #2',
+        cityCountry: 'Addis Ababa, Ethiopia',
+        hours: 'Mon – Sun: 9:00 AM – 7:00 PM',
+        phone: '+251 91 100 4580',
+        whatsapp: '+251 91 100 4580',
+        email: 'sales@alifcarimport.com',
+        mapsUrl: 'https://maps.google.com/?q=Bole+Medhanialem+Addis+Ababa',
+        landmarkNote: 'Opposite Harmony Hotel',
+      },
+      tiktok: {
+        title: 'Showroom Reels',
+        description: 'Live mobile updates',
+        profileUrl: 'https://www.tiktok.com/@alif_car_import',
+        handle: '@alif_car_import',
+      },
+    },
+    vehiclesLoaded: true,
+    remoteVehicles: [],
+    postsLoaded: true,
+    remotePosts: [],
+  });
+
+  assert.ok(merged);
+  assert.equal(merged.contact.addressLine, 'Bole Road Showroom #2');
+  assert.equal(merged.contact.hours, 'Mon – Sun: 9:00 AM – 7:00 PM');
+  assert.equal(merged.contact.phone, '+251 91 100 4580');
+  assert.equal(merged.contact.email, 'sales@alifcarimport.com');
+  assert.equal(merged.contact.landmarkNote, 'Opposite Harmony Hotel');
+  // Omitted optional socials MUST clear instead of reviving stale fallback values
+  assert.equal(merged.contact.telegram, '');
+  assert.equal(merged.contact.instagram, '');
+  assert.equal(merged.contact.facebook, '');
+  assert.equal(merged.contact.x, '');
+
+  const socialPlatforms = getConfiguredSocialLinks(merged.contact, merged.tiktok).map(
+    (item) => item.platform
+  );
+  assert.deepEqual(socialPlatforms, ['whatsapp', 'tiktok']);
+});
+
+test('mergeShowroomSnapshotState applies newly added social media accounts and cleared optional fields from mobile', () => {
+  const merged = mergeShowroomSnapshotState({
+    fallbackStore: INITIAL_SHOWROOM_STORE,
+    hasConfig: true,
+    configData: {
+      contact: {
+        addressLine: 'Kazanchis New Lot',
+        cityCountry: 'Addis Ababa, Ethiopia',
+        hours: 'Daily 9 AM – 6 PM',
+        phone: '+251 92 222 3333',
+        whatsapp: '+251 92 222 3333',
+        telegram: '@alif_official',
+        instagram: 'https://instagram.com/alif_official',
+        facebook: 'alifcarimport',
+        x: '@alifcars',
+        email: '',
+        mapsUrl: '',
+        landmarkNote: '',
+      },
+      tiktok: {
+        title: 'Walkarounds',
+        description: '',
+        profileUrl: '',
+        handle: '',
+      },
+    },
+    vehiclesLoaded: true,
+    remoteVehicles: [],
+    postsLoaded: true,
+    remotePosts: [],
+  });
+
+  assert.ok(merged);
+  assert.equal(merged.contact.telegram, '@alif_official');
+  assert.equal(merged.contact.instagram, 'https://instagram.com/alif_official');
+  assert.equal(merged.contact.facebook, 'alifcarimport');
+  assert.equal(merged.contact.x, '@alifcars');
+  assert.equal(merged.contact.email, '');
+  assert.equal(merged.contact.mapsUrl, '');
+  assert.equal(merged.tiktok.profileUrl, '');
+  assert.equal(merged.tiktok.handle, '');
+
+  const links = getConfiguredSocialLinks(merged.contact, merged.tiktok);
+  assert.deepEqual(
+    links.map((l) => l.platform),
+    ['whatsapp', 'telegram', 'instagram', 'facebook', 'x']
+  );
+});
+
+test('resolveRemoteContact handles mobile alias keys and normalizeExternalUrl normalizes bare map links safely', () => {
+  const resolved = resolveRemoteContact(
+    {
+      address: 'New Branch',
+      city: 'Addis Ababa',
+      openingHours: '9–5',
+      phoneNumber: '+251911000000',
+      whatsappNumber: '+251911000000',
+      googleMapsUrl: 'maps.app.goo.gl/abc123',
+      landmark: 'Next to Bank',
+      emailAddress: 'hello@alif.com',
+      socialMedia: {
+        telegram: 'alif_tg',
+        twitter: '@alif_x',
+      },
+    },
+    INITIAL_SHOWROOM_STORE.contact
+  );
+
+  assert.equal(resolved.addressLine, 'New Branch');
+  assert.equal(resolved.cityCountry, 'Addis Ababa');
+  assert.equal(resolved.hours, '9–5');
+  assert.equal(resolved.phone, '+251911000000');
+  assert.equal(resolved.mapsUrl, 'maps.app.goo.gl/abc123');
+  assert.equal(resolved.telegram, 'alif_tg');
+  assert.equal(resolved.x, '@alif_x');
+
+  assert.equal(normalizeExternalUrl('maps.app.goo.gl/abc123'), 'https://maps.app.goo.gl/abc123');
+  assert.equal(
+    normalizeExternalUrl('https://maps.google.com/?q=Addis'),
+    'https://maps.google.com/?q=Addis'
+  );
+  assert.equal(normalizeExternalUrl('javascript:alert(1)'), '');
 });
 
 test('filterSyncableTikTokPosts omits blank draft cards to avoid unnecessary writes and sortOrder churn', () => {

@@ -35,6 +35,7 @@ import {
   resolvePublicAssetUrl,
 } from './utils/inventory';
 import {
+  cacheShowroomConfigLocally,
   cacheShowroomStoreLocally,
   deleteTikTokPostFromStore,
   deleteVehicleFromStore,
@@ -73,6 +74,44 @@ function readStoredOrderIds(): string[] {
   } catch {
     return [];
   }
+}
+
+function ShowroomPreloader({
+  logoUrl,
+  companyName,
+}: {
+  logoUrl?: string;
+  companyName: string;
+}) {
+  return (
+    <div
+      data-testid="showroom-preloader"
+      role="status"
+      aria-live="polite"
+      aria-label={`Loading ${companyName}`}
+      className="min-h-[100dvh] w-full bg-[#08080a] text-zinc-100 flex flex-col items-center justify-center px-6 select-none"
+    >
+      <div className="flex flex-col items-center gap-5">
+        <img
+          src={resolvePublicAssetUrl(logoUrl) || ALIF_DEFAULT_LOGO}
+          alt={companyName}
+          referrerPolicy="no-referrer"
+          onError={(e) => {
+            if (!e.currentTarget.src.endsWith(ALIF_DEFAULT_LOGO)) {
+              e.currentTarget.src = ALIF_DEFAULT_LOGO;
+            }
+          }}
+          className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover bg-white ring-2 ring-white/20 shadow-[0_12px_36px_rgba(0,0,0,0.65)]"
+        />
+        <div className="w-40 h-1 rounded-full bg-white/[0.08] overflow-hidden">
+          <div className="h-full w-2/5 rounded-full bg-[#E11D2A] animate-preloader-bar" />
+        </div>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-400">
+          {companyName}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function CarDetailRoute({
@@ -405,7 +444,10 @@ export default function App() {
   const cachedInitialStore = useMemo(() => readCachedShowroomStore(), []);
   const initialStore = cachedInitialStore ?? INITIAL_SHOWROOM_STORE;
   const [store, setStore] = useState<ShowroomStore>(initialStore);
-  const [loaded, setLoaded] = useState(Boolean(cachedInitialStore));
+  const [loaded, setLoaded] = useState(
+    Boolean(cachedInitialStore && cachedInitialStore.vehicles.length > 0)
+  );
+  const [initialSyncReady, setInitialSyncReady] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -475,7 +517,14 @@ export default function App() {
 
   // Subscribe ONCE to public showroom collections (config/showroom, vehicles, tiktokPosts)
   // so signing in/out as admin never re-reads all vehicles and TikTok posts a second time.
+  // The UI stays behind the branded pre-loader until all initial snapshots settle so
+  // visitors never see stale defaults jump/swap after the website appears.
   useEffect(() => {
+    const fallbackTimer = window.setTimeout(() => {
+      setLoaded(true);
+      setInitialSyncReady(true);
+    }, 6000);
+
     const unsubscribe = subscribeShowroomFromFirestore(
       storeRef.current,
       (remoteStore, meta) => {
@@ -484,7 +533,11 @@ export default function App() {
           adminEmails: storeRef.current.adminEmails ?? remoteStore.adminEmails,
         };
         storeRef.current = mergedWithAdminEmails;
+        if (meta.hasConfig) {
+          cacheShowroomConfigLocally(mergedWithAdminEmails);
+        }
         if (meta.allLoaded) {
+          window.clearTimeout(fallbackTimer);
           cacheShowroomStoreLocally(mergedWithAdminEmails);
           if (meta.hasConfig) {
             lastSyncedStoreRef.current = mergedWithAdminEmails;
@@ -495,14 +548,20 @@ export default function App() {
         if (meta.vehiclesLoaded || meta.allLoaded) {
           setLoaded(true);
         }
+        if (meta.allLoaded) {
+          setInitialSyncReady(true);
+        }
       },
       (err) => {
+        window.clearTimeout(fallbackTimer);
         setLoaded(true);
+        setInitialSyncReady(true);
         setSaveState('error');
         setSaveError(formatFirestoreUserMessage(err));
       }
     );
     return () => {
+      window.clearTimeout(fallbackTimer);
       unsubscribe();
     };
   }, []);
@@ -889,6 +948,21 @@ export default function App() {
   const openVehicleRoute = (vehicle: Vehicle) => {
     navigate(`/car/${encodeURIComponent(vehicle.id)}`);
   };
+
+  const shouldShowPreloader = isAdminRoute
+    ? !authReady || (Boolean(adminEmail) && !initialSyncReady)
+    : !initialSyncReady;
+
+  if (shouldShowPreloader) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <ShowroomPreloader
+          logoUrl={store.branding.logoUrl}
+          companyName={store.branding.companyName}
+        />
+      </MotionConfig>
+    );
+  }
 
   return (
     <MotionConfig reducedMotion="user">

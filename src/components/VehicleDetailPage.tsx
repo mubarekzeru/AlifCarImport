@@ -473,25 +473,43 @@ export function VehicleDetailPage({
                   </button>
                 )}
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  <a
-                    href={orderNowHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="h-11 inline-flex items-center justify-center gap-2 px-4 border border-zinc-700 hover:border-white text-zinc-100 text-xs sm:text-sm font-medium rounded-lg transition-colors"
-                  >
-                    <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0" aria-hidden="true" />
-                    <span>WhatsApp</span>
-                  </a>
+                {(() => {
+                  const hasOrderWhatsapp = orderNowHref !== '#contact';
+                  const cleanPhone = (contact.phone || '').trim();
+                  if (!hasOrderWhatsapp && !cleanPhone) return null;
+                  return (
+                    <div
+                      className={`grid gap-2.5 ${
+                        hasOrderWhatsapp && cleanPhone ? 'grid-cols-2' : 'grid-cols-1'
+                      }`}
+                    >
+                      {hasOrderWhatsapp && (
+                        <a
+                          href={orderNowHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="h-11 inline-flex items-center justify-center gap-2 px-4 border border-zinc-700 hover:border-white text-zinc-100 text-xs sm:text-sm font-medium rounded-lg transition-colors"
+                        >
+                          <MessageCircle
+                            className="w-4 h-4 text-emerald-400 shrink-0"
+                            aria-hidden="true"
+                          />
+                          <span>WhatsApp</span>
+                        </a>
+                      )}
 
-                  <a
-                    href={`tel:${contact.phone.replace(/\s+/g, '')}`}
-                    className="h-11 inline-flex items-center justify-center gap-2 px-4 border border-zinc-700 hover:border-white text-zinc-100 text-xs sm:text-sm font-medium rounded-lg transition-colors"
-                  >
-                    <Phone className="w-4 h-4 shrink-0" aria-hidden="true" />
-                    <span>Call Showroom</span>
-                  </a>
-                </div>
+                      {cleanPhone && (
+                        <a
+                          href={`tel:${cleanPhone.replace(/\s+/g, '')}`}
+                          className="h-11 inline-flex items-center justify-center gap-2 px-4 border border-zinc-700 hover:border-white text-zinc-100 text-xs sm:text-sm font-medium rounded-lg transition-colors"
+                        >
+                          <Phone className="w-4 h-4 shrink-0" aria-hidden="true" />
+                          <span>Call Showroom</span>
+                        </a>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {vehicle.tiktokUrl && (
                   <a

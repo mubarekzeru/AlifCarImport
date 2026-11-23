@@ -153,6 +153,12 @@ export function HeroSection({
           src={posterSrc}
           alt={hero.title || branding.companyName}
           referrerPolicy="no-referrer"
+          onError={(e) => {
+            const fallbackPoster = resolvePublicAssetUrl(ALIF_DEFAULT_HERO_POSTER);
+            if (fallbackPoster && !e.currentTarget.src.endsWith(fallbackPoster)) {
+              e.currentTarget.src = fallbackPoster;
+            }
+          }}
           className="absolute inset-0 w-full h-full object-cover object-[50%_56%] scale-[1.03] select-none pointer-events-none"
         />
       )}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ExternalLink, Film, Loader2, Play, X } from 'lucide-react';
 import type { TikTokSectionConfig } from '../types/showroom';
 import {
+  buildSocialMediaUrl,
   deriveTitleFromVideoDescription,
   extractTikTokVideoId,
   filterActiveTikTokPosts,
@@ -107,7 +108,9 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
         >
           <div className="space-y-1.5 max-w-2xl">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#E11D2A]">
-              Video Walkarounds · {tiktok.handle}
+              {tiktok.handle.trim()
+                ? `Video Walkarounds · ${tiktok.handle.trim()}`
+                : 'Video Walkarounds'}
             </p>
             <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white">
               {tiktok.title}
@@ -139,17 +142,23 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
               </div>
             )}
 
-            {tiktok.profileUrl && (
-              <a
-                href={tiktok.profileUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap"
-              >
-                <span>Follow {tiktok.handle || 'TikTok'}</span>
-                <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-              </a>
-            )}
+            {(() => {
+              const followHref =
+                buildSocialMediaUrl('tiktok', tiktok.profileUrl) ||
+                buildSocialMediaUrl('tiktok', tiktok.handle);
+              if (!followHref) return null;
+              return (
+                <a
+                  href={followHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap"
+                >
+                  <span>Follow {tiktok.handle.trim() || 'TikTok'}</span>
+                  <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                </a>
+              );
+            })()}
           </div>
         </ScrollReveal>
 

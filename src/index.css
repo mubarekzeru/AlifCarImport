@@ -74,6 +74,11 @@
     animation: alif-scroll-dot 2.1s cubic-bezier(0.45, 0, 0.25, 1) infinite;
     will-change: transform, opacity;
   }
+
+  .animate-preloader-bar {
+    animation: alif-preloader-bar 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    will-change: transform;
+  }
 }
 
 @keyframes alif-scroll-dot {
@@ -94,6 +99,15 @@
   }
 }
 
+@keyframes alif-preloader-bar {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    transform: translate3d(260%, 0, 0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -104,7 +118,8 @@
     transition: none !important;
     will-change: auto !important;
   }
-  .animate-scroll-dot {
+  .animate-scroll-dot,
+  .animate-preloader-bar {
     animation: none !important;
   }
 }

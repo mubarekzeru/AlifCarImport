@@ -3,6 +3,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
   orderBy,
@@ -470,7 +471,17 @@ export function subscribeShowroomFromFirestore(
   let postsLoaded = false;
   let remotePosts: RemoteTikTokPostEntry[] = [];
 
+  let hasEmittedInitial = false;
+
   const emitIfReady = () => {
+    const allLoaded = configLoaded && vehiclesLoaded && postsLoaded;
+    // Wait until all 3 initial Firestore snapshots settle before the first emission
+    // so the website displays complete live data immediately with zero post-load flicker.
+    if (!hasEmittedInitial && !allLoaded) {
+      return;
+    }
+    hasEmittedInitial = true;
+
     const merged = mergeShowroomSnapshotState({
       fallbackStore,
       hasConfig,
@@ -481,15 +492,13 @@ export function subscribeShowroomFromFirestore(
       remotePosts,
     });
     if (!merged) {
-      if (configLoaded && vehiclesLoaded && postsLoaded) {
-        onUpdate(fallbackStore, {
-          hasConfig,
-          vehiclesLoaded,
-          postsLoaded,
-          allLoaded: true,
-          remoteVehicles,
-        });
-      }
+      onUpdate(fallbackStore, {
+        hasConfig,
+        vehiclesLoaded,
+        postsLoaded,
+        allLoaded,
+        remoteVehicles,
+      });
       return;
     }
 
@@ -497,7 +506,7 @@ export function subscribeShowroomFromFirestore(
       hasConfig,
       vehiclesLoaded,
       postsLoaded,
-      allLoaded: configLoaded && vehiclesLoaded && postsLoaded,
+      allLoaded,
       remoteVehicles,
     });
   };
@@ -511,7 +520,9 @@ export function subscribeShowroomFromFirestore(
       emitIfReady();
     },
     (err) => {
+      configLoaded = true;
       logListenerError(err, OperationType.GET, 'config/showroom');
+      emitIfReady();
       onError?.(err);
     }
   );
@@ -554,7 +565,9 @@ export function subscribeShowroomFromFirestore(
       emitIfReady();
     },
     (err) => {
+      vehiclesLoaded = true;
       logListenerError(err, OperationType.LIST, 'vehicles');
+      emitIfReady();
       onError?.(err);
     }
   );
@@ -577,12 +590,60 @@ export function subscribeShowroomFromFirestore(
       emitIfReady();
     },
     (err) => {
+      postsLoaded = true;
       logListenerError(err, OperationType.LIST, 'tiktokPosts');
+      emitIfReady();
       onError?.(err);
     }
   );
 
+  let lastServerConfigRefreshAt = 0;
+  let disposed = false;
+
+  const refreshConfigFromServer = () => {
+    if (disposed) return;
+    const now = Date.now();
+    if (now - lastServerConfigRefreshAt < 3000) return;
+    lastServerConfigRefreshAt = now;
+
+    void getDocFromServer(doc(db, 'config', 'showroom'))
+      .then((snap) => {
+        if (disposed) return;
+        configLoaded = true;
+        hasConfig = snap.exists();
+        configData = snap.exists() ? (snap.data() as RemoteShowroomConfigData) : null;
+        emitIfReady();
+      })
+      .catch(() => {
+        // Ignore transient offline errors; live onSnapshot remains active
+      });
+  };
+
+  const handleVisibilityChange = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      refreshConfigFromServer();
+    }
+  };
+
+  const handleOnline = () => {
+    refreshConfigFromServer();
+  };
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
   return () => {
+    disposed = true;
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsubConfig();
     unsubVehicles();
     unsubPosts();

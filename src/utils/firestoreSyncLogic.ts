@@ -9,11 +9,14 @@ import type {
 } from '../types/showroom';
 import { resolvePublicAssetUrl } from './inventory';
 
+export type RemoteContactInput = Partial<LocationContact> | Record<string, unknown>;
+export type RemoteTikTokHeaderInput = Partial<Omit<TikTokSectionConfig, 'posts'>> | Record<string, unknown>;
+
 export interface RemoteShowroomConfigData {
   branding?: BrandingSettings;
   hero?: HeroPost;
-  tiktok?: Omit<TikTokSectionConfig, 'posts'>;
-  contact?: LocationContact;
+  tiktok?: RemoteTikTokHeaderInput;
+  contact?: RemoteContactInput;
 }
 
 export interface RemoteTikTokPostEntry extends TikTokPost {
@@ -31,11 +34,75 @@ export interface ShowroomSnapshotInput {
   remoteAdminEmails?: string[];
 }
 
+function readStringField(
+  source: object | undefined | null,
+  keys: string[]
+): string {
+  if (!source || typeof source !== 'object') return '';
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    const val = record[key];
+    if (typeof val === 'string') {
+      return val;
+    }
+  }
+  return '';
+}
+
+/**
+ * Resolves contact, location, and social media fields authoritatively from Firestore.
+ * Once Firestore config/showroom.contact exists, omitted or cleared optional fields
+ * (such as telegram, instagram, facebook, x) become '' instead of resurrecting stale defaults.
+ */
+export function resolveRemoteContact(
+  rawContact: RemoteContactInput | undefined | null,
+  fallbackContact: LocationContact
+): LocationContact {
+  if (!rawContact || typeof rawContact !== 'object') {
+    return fallbackContact;
+  }
+
+  const record = rawContact as Record<string, unknown>;
+  const nestedSocial =
+    (record.socialMedia && typeof record.socialMedia === 'object'
+      ? (record.socialMedia as Record<string, unknown>)
+      : null) ||
+    (record.social && typeof record.social === 'object'
+      ? (record.social as Record<string, unknown>)
+      : null) ||
+    (record.socialLinks && typeof record.socialLinks === 'object'
+      ? (record.socialLinks as Record<string, unknown>)
+      : null);
+
+  return {
+    addressLine: readStringField(rawContact, ['addressLine', 'address', 'streetAddress']),
+    cityCountry: readStringField(rawContact, ['cityCountry', 'city', 'location']),
+    hours: readStringField(rawContact, ['hours', 'openingHours', 'workingHours']),
+    phone: readStringField(rawContact, ['phone', 'phoneNumber']),
+    whatsapp: readStringField(rawContact, ['whatsapp', 'whatsappNumber', 'whatsappUrl']),
+    telegram:
+      readStringField(rawContact, ['telegram', 'telegramUrl', 'telegramHandle']) ||
+      readStringField(nestedSocial, ['telegram', 'telegramUrl', 'telegramHandle']),
+    instagram:
+      readStringField(rawContact, ['instagram', 'instagramUrl', 'instagramHandle']) ||
+      readStringField(nestedSocial, ['instagram', 'instagramUrl', 'instagramHandle']),
+    facebook:
+      readStringField(rawContact, ['facebook', 'facebookUrl', 'facebookHandle']) ||
+      readStringField(nestedSocial, ['facebook', 'facebookUrl', 'facebookHandle']),
+    x:
+      readStringField(rawContact, ['x', 'twitter', 'xUrl', 'twitterUrl']) ||
+      readStringField(nestedSocial, ['x', 'twitter', 'xUrl', 'twitterUrl']),
+    email: readStringField(rawContact, ['email', 'emailAddress']),
+    mapsUrl: readStringField(rawContact, ['mapsUrl', 'googleMapsUrl', 'mapUrl']),
+    landmarkNote: readStringField(rawContact, ['landmarkNote', 'landmark', 'directionsNote']),
+  };
+}
+
 /**
  * Merges incoming Firestore collection snapshots into a ShowroomStore without
  * wiping vehicles or TikTok posts that have not finished loading yet.
- * Once a collection finishes loading from Firestore, it is strictly authoritative
- * so deletions made in Admin are always reflected on the website.
+ * Once a collection or config/showroom finishes loading from Firestore, it is strictly
+ * authoritative so edits, clears, and deletions made in Web or Mobile Admin are always reflected.
  */
 export function mergeShowroomSnapshotState(
   input: ShowroomSnapshotInput
@@ -84,18 +151,40 @@ export function mergeShowroomSnapshotState(
         .map(({ sortOrder: _sortOrder, ...post }) => post)
     : base.tiktok.posts;
 
+  const remoteTikTok = configData?.tiktok;
+  const resolvedTikTokHeader =
+    remoteTikTok && typeof remoteTikTok === 'object'
+      ? {
+          title: typeof remoteTikTok.title === 'string' ? remoteTikTok.title : base.tiktok.title,
+          description:
+            typeof remoteTikTok.description === 'string'
+              ? remoteTikTok.description
+              : '',
+          profileUrl:
+            typeof remoteTikTok.profileUrl === 'string'
+              ? remoteTikTok.profileUrl
+              : '',
+          handle:
+            typeof remoteTikTok.handle === 'string'
+              ? remoteTikTok.handle
+              : '',
+        }
+      : {
+          title: base.tiktok.title,
+          description: base.tiktok.description,
+          profileUrl: base.tiktok.profileUrl,
+          handle: base.tiktok.handle,
+        };
+
   return {
     branding: resolvedBranding,
     hero: resolvedHero,
     vehicles: resolvedVehicles,
     tiktok: {
-      title: configData?.tiktok?.title ?? base.tiktok.title,
-      description: configData?.tiktok?.description ?? base.tiktok.description,
-      profileUrl: configData?.tiktok?.profileUrl ?? base.tiktok.profileUrl,
-      handle: configData?.tiktok?.handle ?? base.tiktok.handle,
+      ...resolvedTikTokHeader,
       posts: resolvedPosts,
     },
-    contact: configData?.contact ? { ...base.contact, ...configData.contact } : base.contact,
+    contact: resolveRemoteContact(configData?.contact, base.contact),
     adminEmails: remoteAdminEmails ?? base.adminEmails,
   };
 }

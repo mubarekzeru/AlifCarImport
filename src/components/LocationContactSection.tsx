@@ -12,6 +12,7 @@ import type { LocationContact, TikTokSectionConfig } from '../types/showroom';
 import {
   buildWhatsAppHref,
   getConfiguredSocialLinks,
+  normalizeExternalUrl,
   resolvePublicAssetUrl,
   type SocialPlatform,
 } from '../utils/inventory';
@@ -40,10 +41,19 @@ export function LocationContactSection({
   logoUrl,
   tiktok,
 }: LocationContactSectionProps) {
+  const whatsappRaw = (contact.whatsapp || contact.phone || '').trim();
   const whatsappHref = buildWhatsAppHref(
-    contact.whatsapp || contact.phone,
+    whatsappRaw,
     `Hello ${companyName}, I would like to visit the showroom or order an imported vehicle.`
   );
+  const hasWhatsapp = whatsappHref !== '#contact';
+  const cleanPhone = (contact.phone || '').trim();
+  const cleanEmail = (contact.email || '').trim();
+  const cleanMapsUrl = normalizeExternalUrl(contact.mapsUrl);
+  const cleanAddress = (contact.addressLine || '').trim();
+  const cleanCity = (contact.cityCountry || '').trim();
+  const cleanLandmark = (contact.landmarkNote || '').trim();
+  const cleanHours = (contact.hours || '').trim();
   const socialLinks = getConfiguredSocialLinks(contact, tiktok, companyName);
 
   return (
@@ -84,25 +94,31 @@ export function LocationContactSection({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 shrink-0">
-            <a
-              href={whatsappHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs sm:text-sm font-semibold rounded-full transition-colors whitespace-nowrap shadow-[0_8px_22px_rgba(225,29,42,0.25)]"
-            >
-              <MessageCircle className="w-4 h-4" aria-hidden="true" />
-              <span>Chat on WhatsApp</span>
-            </a>
+          {(hasWhatsapp || cleanPhone) && (
+            <div className="flex flex-wrap items-center gap-3 shrink-0">
+              {hasWhatsapp && (
+                <a
+                  href={whatsappHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#E11D2A] hover:bg-[#C81722] text-white text-xs sm:text-sm font-semibold rounded-full transition-colors whitespace-nowrap shadow-[0_8px_22px_rgba(225,29,42,0.25)]"
+                >
+                  <MessageCircle className="w-4 h-4" aria-hidden="true" />
+                  <span>Chat on WhatsApp</span>
+                </a>
+              )}
 
-            <a
-              href={`tel:${contact.phone.replace(/\s+/g, '')}`}
-              className="inline-flex items-center gap-2 px-5 py-2.5 border border-white/15 hover:border-white/40 text-zinc-200 hover:text-white text-xs sm:text-sm font-medium rounded-full transition-colors whitespace-nowrap"
-            >
-              <Phone className="w-4 h-4" aria-hidden="true" />
-              <span>Call Showroom</span>
-            </a>
-          </div>
+              {cleanPhone && (
+                <a
+                  href={`tel:${cleanPhone.replace(/\s+/g, '')}`}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 border border-white/15 hover:border-white/40 text-zinc-200 hover:text-white text-xs sm:text-sm font-medium rounded-full transition-colors whitespace-nowrap"
+                >
+                  <Phone className="w-4 h-4" aria-hidden="true" />
+                  <span>Call Showroom</span>
+                </a>
+              )}
+            </div>
+          )}
         </ScrollReveal>
 
         {/* Showroom Location, Direct Line & Hours Cards */}
@@ -119,14 +135,12 @@ export function LocationContactSection({
               <h3 className="font-display text-sm font-semibold text-white">Showroom Address</h3>
             </div>
             <div className="space-y-1 text-xs sm:text-sm">
-              <p className="text-zinc-200">{contact.addressLine}</p>
-              <p className="text-zinc-400">{contact.cityCountry}</p>
-              {contact.landmarkNote && (
-                <p className="text-xs text-zinc-500">{contact.landmarkNote}</p>
-              )}
-              {contact.mapsUrl && (
+              {cleanAddress && <p className="text-zinc-200">{cleanAddress}</p>}
+              {cleanCity && <p className="text-zinc-400">{cleanCity}</p>}
+              {cleanLandmark && <p className="text-xs text-zinc-500">{cleanLandmark}</p>}
+              {cleanMapsUrl && (
                 <a
-                  href={contact.mapsUrl}
+                  href={cleanMapsUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-xs font-semibold text-[#E11D2A] hover:text-red-400 hover:underline pt-1"
@@ -146,23 +160,27 @@ export function LocationContactSection({
               <h3 className="font-display text-sm font-semibold text-white">Phone &amp; Email</h3>
             </div>
             <div className="space-y-1.5 text-xs sm:text-sm">
-              <p className="tabular-nums">
-                <a
-                  href={`tel:${contact.phone.replace(/\s+/g, '')}`}
-                  className="text-zinc-200 hover:text-[#E11D2A] transition-colors font-medium"
-                >
-                  {contact.phone}
-                </a>
-              </p>
-              <p className="flex items-center gap-1.5 text-zinc-400">
-                <Mail className="w-3.5 h-3.5 text-zinc-500 shrink-0" aria-hidden="true" />
-                <a
-                  href={`mailto:${contact.email}`}
-                  className="hover:text-white transition-colors truncate"
-                >
-                  {contact.email}
-                </a>
-              </p>
+              {cleanPhone && (
+                <p className="tabular-nums">
+                  <a
+                    href={`tel:${cleanPhone.replace(/\s+/g, '')}`}
+                    className="text-zinc-200 hover:text-[#E11D2A] transition-colors font-medium"
+                  >
+                    {cleanPhone}
+                  </a>
+                </p>
+              )}
+              {cleanEmail && (
+                <p className="flex items-center gap-1.5 text-zinc-400">
+                  <Mail className="w-3.5 h-3.5 text-zinc-500 shrink-0" aria-hidden="true" />
+                  <a
+                    href={`mailto:${cleanEmail}`}
+                    className="hover:text-white transition-colors truncate"
+                  >
+                    {cleanEmail}
+                  </a>
+                </p>
+              )}
             </div>
           </div>
 
@@ -174,7 +192,7 @@ export function LocationContactSection({
               <h3 className="font-display text-sm font-semibold text-white">Showroom Hours</h3>
             </div>
             <div className="space-y-1 text-xs sm:text-sm">
-              <p className="text-zinc-200">{contact.hours}</p>
+              {cleanHours && <p className="text-zinc-200">{cleanHours}</p>}
               <p className="text-xs text-zinc-500">
                 Walk-in inspections &amp; scheduled handovers welcome.
               </p>

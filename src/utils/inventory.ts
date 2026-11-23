@@ -410,6 +410,27 @@ export function buildWhatsAppHref(rawNumber: string, message: string): string {
   return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
 }
 
+export function normalizeExternalUrl(rawUrl?: string): string {
+  const trimmed = (rawUrl ?? '').trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? trimmed : '';
+    } catch {
+      return '';
+    }
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    // Reject non-http(s) protocols such as javascript: or data:
+    return '';
+  }
+  if (/^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[/?#].*)?$/i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return '';
+}
+
 export type SocialPlatform =
   | 'telegram'
   | 'instagram'
@@ -426,11 +447,11 @@ export interface ConfiguredSocialLink {
 }
 
 const PLATFORM_DOMAIN_PREFIXES: Record<Exclude<SocialPlatform, 'whatsapp'>, RegExp> = {
-  telegram: /^(?:www\.)?(?:t\.me|telegram\.me)\//i,
-  instagram: /^(?:www\.)?instagram\.com\//i,
-  facebook: /^(?:www\.|m\.)?(?:facebook\.com|fb\.com)\//i,
-  x: /^(?:www\.)?(?:x\.com|twitter\.com)\//i,
-  tiktok: /^(?:www\.|vt\.|vm\.)?tiktok\.com\//i,
+  telegram: /^(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\//i,
+  instagram: /^(?:www\.)?(?:instagram\.com|instagr\.am)\//i,
+  facebook: /^(?:www\.|m\.|mobile\.)?(?:facebook\.com|fb\.com|fb\.me)\//i,
+  x: /^(?:www\.|m\.|mobile\.)?(?:x\.com|twitter\.com)\//i,
+  tiktok: /^(?:www\.|m\.|vt\.|vm\.|lite\.)?tiktok\.com\//i,
 };
 
 export function buildSocialMediaUrl(
@@ -447,7 +468,7 @@ export function buildSocialMediaUrl(
   }
 
   if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
+    return normalizeExternalUrl(trimmed) || null;
   }
 
   if (PLATFORM_DOMAIN_PREFIXES[platform].test(trimmed)) {
