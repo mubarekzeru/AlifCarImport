@@ -669,7 +669,7 @@ export default function App() {
   ): Promise<boolean> => {
     if (!adminEmail) return false;
     const prevBeforeEdit = storeRef.current;
-    const prevSnapshot = lastSyncedStoreRef.current ?? prevBeforeEdit;
+    const prevSnapshot = lastSyncedStoreRef.current;
     const nextStore =
       typeof nextStoreOrUpdater === 'function'
         ? nextStoreOrUpdater(prevBeforeEdit)
@@ -691,7 +691,7 @@ export default function App() {
 
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
-      void persistStoreNow(storeRef.current, lastSyncedStoreRef.current ?? prevBeforeEdit);
+      void persistStoreNow(storeRef.current, lastSyncedStoreRef.current);
     }, 800);
     return true;
   };

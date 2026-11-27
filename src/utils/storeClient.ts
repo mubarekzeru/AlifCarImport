@@ -146,6 +146,22 @@ export function readCachedShowroomStore(): ShowroomStore | null {
               contact: cachedConfig.contact,
             }
           : parsed;
+        if (merged.vehicles.length === 0 && INITIAL_SHOWROOM_STORE.vehicles.length > 0) {
+          return normalizeStoreAssetPaths({
+            ...INITIAL_SHOWROOM_STORE,
+            branding: merged.branding ?? INITIAL_SHOWROOM_STORE.branding,
+            hero: merged.hero ?? INITIAL_SHOWROOM_STORE.hero,
+            tiktok: {
+              ...(merged.tiktok ?? INITIAL_SHOWROOM_STORE.tiktok),
+              posts:
+                merged.tiktok?.posts?.length
+                  ? merged.tiktok.posts
+                  : INITIAL_SHOWROOM_STORE.tiktok.posts,
+            },
+            contact: merged.contact ?? INITIAL_SHOWROOM_STORE.contact,
+            adminEmails: merged.adminEmails ?? INITIAL_SHOWROOM_STORE.adminEmails,
+          });
+        }
         return normalizeStoreAssetPaths(merged);
       }
     }
@@ -372,23 +388,21 @@ export async function ensureFirestoreSeeded(
       !snapshotMeta?.hasConfig &&
       (snapshotMeta?.remoteVehicles?.length ?? 0) === 0;
     if (cloudflareIsEmpty) {
-      try {
-        return await importMobileAppDataToCloudflare(seedStore);
-      } catch {
-        // Firebase daily quota may still be cooling down; seed the imported
-        // alifcarimport.com catalog into Cloudflare D1 so it is immediately live & editable.
-        if (seedStore.vehicles.length > 0) {
-          const uploaded = await migrateShowroomStoreToCloudflare(seedStore);
-          cacheShowroomStoreLocally(seedStore);
-          return {
-            store: seedStore,
-            vehicleCount: uploaded.vehicleCount,
-            tiktokCount: uploaded.tiktokCount,
-            hasConfig: true,
-          };
-        }
-        return null;
+      // Seed the imported alifcarimport.com catalog directly into Cloudflare D1
+      // without touching Firebase Firestore (avoids daily read quota hangs/429s).
+      const catalogToSeed =
+        seedStore.vehicles.length > 0 ? seedStore : INITIAL_SHOWROOM_STORE;
+      if (catalogToSeed.vehicles.length > 0) {
+        const uploaded = await migrateShowroomStoreToCloudflare(catalogToSeed);
+        cacheShowroomStoreLocally(catalogToSeed);
+        return {
+          store: catalogToSeed,
+          vehicleCount: uploaded.vehicleCount,
+          tiktokCount: uploaded.tiktokCount,
+          hasConfig: true,
+        };
       }
+      return null;
     }
     return null;
   }

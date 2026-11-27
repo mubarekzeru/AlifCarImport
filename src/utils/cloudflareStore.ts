@@ -146,8 +146,16 @@ export function mapRemoteShowroomResponse(
     remoteVehicles,
   };
 
+  const emptyRemoteFallback: ShowroomStore =
+    fallbackStore.vehicles.length > 0 || INITIAL_SHOWROOM_STORE.vehicles.length === 0
+      ? fallbackStore
+      : {
+          ...INITIAL_SHOWROOM_STORE,
+          adminEmails: fallbackStore.adminEmails ?? INITIAL_SHOWROOM_STORE.adminEmails,
+        };
+
   return {
-    store: merged ?? fallbackStore,
+    store: merged ?? emptyRemoteFallback,
     meta,
   };
 }
@@ -437,6 +445,33 @@ export async function syncShowroomStoreToCloudflare(
   notifyCloudflareShowroomChanged();
 }
 
+async function inlineLocalAssetForR2(url: string): Promise<string> {
+  const trimmed = (url ?? '').trim();
+  if (!trimmed || trimmed.startsWith('data:') || /^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  if (typeof window === 'undefined' || typeof FileReader === 'undefined') {
+    return trimmed;
+  }
+  try {
+    const res = await fetch(resolvePublicAssetUrl(trimmed));
+    if (!res.ok) return trimmed;
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/') || blob.size === 0 || blob.size > 4 * 1024 * 1024) {
+      return trimmed;
+    }
+    return await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onerror = () => resolve(trimmed);
+      reader.onload = () =>
+        resolve(typeof reader.result === 'string' ? reader.result : trimmed);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return trimmed;
+  }
+}
+
 export async function migrateShowroomStoreToCloudflare(
   store: ShowroomStore,
   onProgress?: (status: string) => void
@@ -467,10 +502,18 @@ export async function migrateShowroomStoreToCloudflare(
     onProgress?.(
       `Uploading vehicle ${i + 1} of ${vehicles.length}: ${vehicle.title || vehicle.model || vehicle.id}...`
     );
+    const inlinedPrimary = await inlineLocalAssetForR2(vehicle.imageUrl);
+    const inlinedGallery = Array.isArray(vehicle.galleryImages)
+      ? await Promise.all(vehicle.galleryImages.map((img) => inlineLocalAssetForR2(img)))
+      : [];
     await cloudflareFetchJson(`/api/admin/vehicles/${encodeURIComponent(vehicle.id)}`, {
       method: 'PUT',
       headers,
-      body: JSON.stringify(vehicle),
+      body: JSON.stringify({
+        ...vehicle,
+        imageUrl: inlinedPrimary,
+        galleryImages: inlinedGallery,
+      }),
     });
   }
 

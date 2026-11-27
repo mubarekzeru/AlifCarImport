@@ -113,3 +113,52 @@ test('mapRemoteShowroomResponse orders TikTok posts newest-first and respects au
   assert.equal(store.contact.addressLine, 'Meskel Flower Showroom');
   assert.equal(store.contact.telegram, '');
 });
+
+test('mapRemoteShowroomResponse recovers bundled vehicles when Cloudflare D1 is uninitialized and cached fallback is empty', () => {
+  const staleEmptyFallback = {
+    ...INITIAL_SHOWROOM_STORE,
+    vehicles: [],
+  };
+
+  const { store, meta } = mapRemoteShowroomResponse(
+    {
+      hasConfig: false,
+      branding: null,
+      hero: null,
+      tiktokHeader: null,
+      contact: null,
+      vehicles: [],
+      tiktokPosts: [],
+    },
+    staleEmptyFallback
+  );
+
+  assert.equal(meta.hasConfig, false);
+  assert.equal(meta.allLoaded, true);
+  assert.equal(store.vehicles.length, INITIAL_SHOWROOM_STORE.vehicles.length);
+  assert.ok(store.vehicles.length > 0);
+});
+
+test('mapRemoteShowroomResponse respects 0 vehicles once Cloudflare D1 config is initialized', () => {
+  const { store, meta } = mapRemoteShowroomResponse(
+    {
+      hasConfig: true,
+      branding: INITIAL_SHOWROOM_STORE.branding,
+      hero: INITIAL_SHOWROOM_STORE.hero,
+      tiktokHeader: {
+        title: INITIAL_SHOWROOM_STORE.tiktok.title,
+        description: INITIAL_SHOWROOM_STORE.tiktok.description,
+        profileUrl: INITIAL_SHOWROOM_STORE.tiktok.profileUrl,
+        handle: INITIAL_SHOWROOM_STORE.tiktok.handle,
+      },
+      contact: INITIAL_SHOWROOM_STORE.contact,
+      vehicles: [],
+      tiktokPosts: [],
+    },
+    INITIAL_SHOWROOM_STORE
+  );
+
+  assert.equal(meta.hasConfig, true);
+  assert.equal(store.vehicles.length, 0);
+});
+
