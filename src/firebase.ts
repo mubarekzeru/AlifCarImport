@@ -107,11 +107,19 @@ export function formatFirestoreUserMessage(err: unknown): string {
 }
 
 async function testConnection(): Promise<void> {
-  if (
-    typeof window !== 'undefined' &&
-    typeof navigator !== 'undefined' &&
-    navigator.onLine === false
-  ) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const cfUrl =
+    typeof import.meta !== 'undefined' && import.meta.env
+      ? String(import.meta.env.VITE_CLOUDFLARE_API_URL || '').trim().toLowerCase()
+      : '';
+  const cloudflareExplicitlyDisabled =
+    cfUrl === 'disabled' || cfUrl === 'false' || cfUrl === 'off';
+  if (!cloudflareExplicitlyDisabled) {
+    return;
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     window.addEventListener('online', () => void testConnection(), { once: true });
     return;
   }
@@ -124,4 +132,6 @@ async function testConnection(): Promise<void> {
   }
 }
 
-void testConnection();
+if (typeof window !== 'undefined') {
+  void testConnection();
+}

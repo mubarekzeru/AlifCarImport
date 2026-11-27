@@ -6,6 +6,7 @@ import {
   type FieldValue,
   type Firestore,
 } from 'firebase/firestore';
+import { isCloudflareBackendEnabled, trackVisitToCloudflare } from './cloudflareStore';
 
 export const VISITOR_ID_STORAGE_KEY = 'alif_visitor_id';
 export const VISIT_SESSION_KEY_PREFIX = 'alif_visited_';
@@ -119,13 +120,39 @@ export async function trackWebsiteVisit(db: Firestore): Promise<void> {
     markVisitedInSession(sessionKey);
 
     const visitorId = getOrCreateVisitorId();
+    const referrer = typeof document !== 'undefined' ? document.referrer : '';
+    const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+
+    if (isCloudflareBackendEnabled()) {
+      const nowMillis = Date.now();
+      const visitId = `vis_${nowMillis.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      const payload = buildPageVisitPayload({
+        id: visitId,
+        page: path,
+        visitorId,
+        referrer,
+        userAgent,
+        nowMillis,
+      });
+      await trackVisitToCloudflare({
+        id: payload.id,
+        page: payload.page,
+        visitorId: payload.visitorId,
+        dateKey: payload.dateKey,
+        referrer: payload.referrer,
+        userAgent: payload.userAgent,
+        timestampMillis: payload.timestampMillis,
+      });
+      return;
+    }
+
     const visitRef = doc(collection(db, 'pageVisits'));
     const payload = buildPageVisitPayload({
       id: visitRef.id,
       page: path,
       visitorId,
-      referrer: typeof document !== 'undefined' ? document.referrer : '',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      referrer,
+      userAgent,
     });
 
     await setDoc(visitRef, payload);

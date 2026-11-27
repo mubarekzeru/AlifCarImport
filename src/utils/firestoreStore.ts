@@ -256,6 +256,111 @@ export async function fetchRemoteVehicleSummariesFromFirestore(): Promise<
   }
 }
 
+export interface FirestoreMigrationSnapshot {
+  store: ShowroomStore;
+  hasConfig: boolean;
+  vehicleCount: number;
+  tiktokCount: number;
+}
+
+export async function fetchShowroomSnapshotFromFirestore(
+  fallbackStore: ShowroomStore
+): Promise<FirestoreMigrationSnapshot> {
+  const [configSnap, vehiclesSnap, postsSnap] = await Promise.all([
+    getDoc(doc(db, 'config', 'showroom')),
+    getDocs(collection(db, 'vehicles')),
+    getDocs(collection(db, 'tiktokPosts')),
+  ]);
+
+  const hasConfig = configSnap.exists();
+  const configData = hasConfig ? (configSnap.data() as RemoteShowroomConfigData) : null;
+
+  const remoteVehicles: Vehicle[] = vehiclesSnap.docs
+    .map((d) => {
+      const data = d.data() as Record<string, unknown>;
+      const rawGallery = Array.isArray(data.galleryImages)
+        ? data.galleryImages
+        : Array.isArray(data.images)
+        ? data.images
+        : [];
+      const primaryImage = String(data.imageUrl ?? data.photoUrl ?? data.coverImageUrl ?? '');
+      return {
+        id: d.id,
+        title: String(data.title ?? ''),
+        make: String(data.make ?? ''),
+        model: String(data.model ?? ''),
+        year: Number(data.year ?? 2024),
+        price: Number(data.price ?? 0),
+        ...(typeof data.originalPrice === 'number' ? { originalPrice: data.originalPrice } : {}),
+        mileage: String(data.mileage ?? ''),
+        transmission: String(data.transmission ?? ''),
+        fuelType: String(data.fuelType ?? ''),
+        color: String(data.color ?? ''),
+        origin: String(data.origin ?? ''),
+        imageUrl: resolvePublicAssetUrl(primaryImage),
+        galleryImages: rawGallery
+          .filter((u): u is string => typeof u === 'string' && Boolean(u.trim()))
+          .map((u) => resolvePublicAssetUrl(u)),
+        description: String(data.description ?? ''),
+        tiktokUrl: String(data.tiktokUrl ?? data.videoUrl ?? ''),
+        status: (data.status === 'reserved' || data.status === 'sold'
+          ? data.status
+          : 'available') as Vehicle['status'],
+        featured: Boolean(data.featured),
+        createdAt: String(data.createdAt ?? ''),
+      };
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const remotePosts: RemoteTikTokPostEntry[] = postsSnap.docs.map((d) => {
+    const data = d.data() as Record<string, unknown>;
+    const rawUpdatedAt = data.updatedAt as
+      | { toMillis?: () => number; seconds?: number }
+      | number
+      | string
+      | undefined;
+    let updatedAtMillis = 0;
+    if (rawUpdatedAt && typeof rawUpdatedAt === 'object') {
+      if (typeof rawUpdatedAt.toMillis === 'function') {
+        updatedAtMillis = rawUpdatedAt.toMillis();
+      } else if (typeof rawUpdatedAt.seconds === 'number') {
+        updatedAtMillis = rawUpdatedAt.seconds * 1000;
+      }
+    } else if (typeof rawUpdatedAt === 'number' && Number.isFinite(rawUpdatedAt)) {
+      updatedAtMillis = rawUpdatedAt;
+    } else if (typeof rawUpdatedAt === 'string') {
+      const parsed = Date.parse(rawUpdatedAt);
+      if (Number.isFinite(parsed)) updatedAtMillis = parsed;
+    }
+    return {
+      id: d.id,
+      title: String(data.title ?? ''),
+      caption: String(data.caption ?? ''),
+      tiktokUrl: String(data.tiktokUrl ?? data.videoUrl ?? data.url ?? ''),
+      coverImageUrl: String(data.coverImageUrl ?? data.thumbnailUrl ?? ''),
+      sortOrder: typeof data.sortOrder === 'number' ? data.sortOrder : 0,
+      updatedAtMillis,
+    };
+  });
+
+  const merged = mergeShowroomSnapshotState({
+    fallbackStore,
+    hasConfig,
+    configData,
+    vehiclesLoaded: true,
+    remoteVehicles,
+    postsLoaded: true,
+    remotePosts,
+  });
+
+  return {
+    store: merged ?? fallbackStore,
+    hasConfig,
+    vehicleCount: remoteVehicles.length,
+    tiktokCount: remotePosts.length,
+  };
+}
+
 export async function syncCatalogVehiclesToFirestore(
   vehicles: Vehicle[],
   legacyDuplicateIds: string[] = []

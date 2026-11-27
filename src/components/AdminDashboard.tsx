@@ -69,6 +69,9 @@ interface AdminDashboardProps {
   onDeleteVehicle?: (id: string) => Promise<boolean>;
   onDeleteTikTokPost?: (id: string) => Promise<boolean>;
   onResetDefaults?: () => void;
+  onImportFromFirebase?: (
+    onProgress?: (status: string) => void
+  ) => Promise<{ vehicleCount: number; tiktokCount: number }>;
   onPublishAndView: (sectionId?: string) => Promise<void>;
   onSignOut?: () => void;
 }
@@ -85,6 +88,7 @@ export function AdminDashboard({
   onUpdateStore,
   onDeleteVehicle,
   onDeleteTikTokPost,
+  onImportFromFirebase,
   onPublishAndView,
   onSignOut,
 }: AdminDashboardProps) {
@@ -116,6 +120,35 @@ export function AdminDashboard({
     message: string;
     sectionId?: string;
   } | null>(null);
+  const [importingMobileApp, setImportingMobileApp] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
+
+  const handleImportFromMobileApp = async () => {
+    if (!onImportFromFirebase || importingMobileApp) return;
+    setImportingMobileApp(true);
+    setImportProgress('Connecting to Firebase...');
+    setUploadNotice(null);
+    onDismissSaveError?.();
+    try {
+      const result = await onImportFromFirebase((msg) => setImportProgress(msg));
+      setUploadNotice({
+        type: 'success',
+        message: `Imported ${result.vehicleCount} vehicle${result.vehicleCount === 1 ? '' : 's'}, ${result.tiktokCount} TikTok video${result.tiktokCount === 1 ? '' : 's'}, and showroom details from your mobile app to Cloudflare.`,
+        sectionId: 'inventory',
+      });
+    } catch (err) {
+      setUploadNotice({
+        type: 'error',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Unable to import data from Firebase right now.',
+      });
+    } finally {
+      setImportingMobileApp(false);
+      setImportProgress('');
+    }
+  };
 
   const availableMakes = useMemo(
     () =>
@@ -896,6 +929,21 @@ export function AdminDashboard({
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
+              {onImportFromFirebase && (
+                <button
+                  type="button"
+                  disabled={importingMobileApp}
+                  onClick={() => void handleImportFromMobileApp()}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-xs font-medium text-amber-200 hover:bg-amber-500/20 disabled:opacity-60 cursor-pointer whitespace-nowrap"
+                >
+                  {importingMobileApp ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                  <span>{importingMobileApp ? 'Importing...' : 'Import App'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void onPublishAndView()}
@@ -967,6 +1015,22 @@ export function AdminDashboard({
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            {onImportFromFirebase && (
+              <button
+                type="button"
+                disabled={importingMobileApp}
+                onClick={() => void handleImportFromMobileApp()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-xs font-medium text-amber-200 hover:text-white disabled:opacity-60 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {importingMobileApp ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>{importingMobileApp ? importProgress || 'Importing...' : 'Import from Mobile App'}</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => void onPublishAndView()}

@@ -22,6 +22,12 @@ import {
 import { app, auth, db, formatFirestoreUserMessage } from './firebase';
 import type { ShowroomStore, Vehicle, VehicleFilters, VehicleStatus } from './types/showroom';
 import {
+  fetchAdminAllowlistFromCloudflare,
+  isCloudflareBackendEnabled,
+  subscribeAdminAccessFromCloudflare,
+  subscribeShowroomFromCloudflare,
+} from './utils/cloudflareStore';
+import {
   fetchAdminAllowlistFromFirestore,
   subscribeAdminAccessFromFirestore,
   subscribeShowroomFromFirestore,
@@ -40,6 +46,7 @@ import {
   deleteTikTokPostFromStore,
   deleteVehicleFromStore,
   ensureFirestoreSeeded,
+  importMobileAppDataToCloudflare,
   logoutAdmin,
   readCachedShowroomStore,
   resetShowroomStore,
@@ -471,7 +478,9 @@ export default function App() {
       if (user?.email && user.emailVerified) {
         let allowed = isAuthorizedAdminEmail(user.email, storeRef.current.adminEmails);
         if (!allowed) {
-          const remoteAllowlist = await fetchAdminAllowlistFromFirestore();
+          const remoteAllowlist = isCloudflareBackendEnabled()
+            ? await fetchAdminAllowlistFromCloudflare(user)
+            : await fetchAdminAllowlistFromFirestore();
           allowed = isAuthorizedAdminEmail(user.email, [
             ...(storeRef.current.adminEmails ?? []),
             ...(remoteAllowlist ?? []),
@@ -526,7 +535,11 @@ export default function App() {
       setInitialSyncReady(true);
     }, 6000);
 
-    const unsubscribe = subscribeShowroomFromFirestore(
+    const subscribeShowroom = isCloudflareBackendEnabled()
+      ? subscribeShowroomFromCloudflare
+      : subscribeShowroomFromFirestore;
+
+    const unsubscribe = subscribeShowroom(
       storeRef.current,
       (remoteStore, meta) => {
         const mergedWithAdminEmails: ShowroomStore = {
@@ -567,10 +580,13 @@ export default function App() {
     };
   }, []);
 
-  // Subscribe to config/adminAccess only when an authorized admin is signed in.
+  // Subscribe to admin allowlist only when an authorized admin is signed in.
   useEffect(() => {
     if (!authReady || !adminEmail) return;
-    const unsubscribe = subscribeAdminAccessFromFirestore(
+    const subscribeAccess = isCloudflareBackendEnabled()
+      ? subscribeAdminAccessFromCloudflare
+      : subscribeAdminAccessFromFirestore;
+    const unsubscribe = subscribeAccess(
       (adminEmails) => {
         const nextStore: ShowroomStore = {
           ...storeRef.current,
@@ -595,14 +611,23 @@ export default function App() {
     };
   }, [authReady, adminEmail]);
 
-  // Run catalog seeding at most once per session using already-loaded snapshot state (0 extra reads).
+  // Run catalog seeding / auto-import from mobile app (Firebase) once per session if empty.
   useEffect(() => {
     if (!adminEmail || !remoteSyncMeta?.allLoaded || seededOnceRef.current) return;
     seededOnceRef.current = true;
-    void ensureFirestoreSeeded(storeRef.current, remoteSyncMeta).catch((err) => {
-      setSaveState('error');
-      setSaveError(formatFirestoreUserMessage(err));
-    });
+    void ensureFirestoreSeeded(storeRef.current, remoteSyncMeta)
+      .then((imported) => {
+        if (imported) {
+          storeRef.current = imported.store;
+          lastSyncedStoreRef.current = imported.store;
+          setStore(imported.store);
+          setSaveState('saved');
+        }
+      })
+      .catch((err) => {
+        setSaveState('error');
+        setSaveError(formatFirestoreUserMessage(err));
+      });
   }, [adminEmail, remoteSyncMeta]);
 
   useEffect(() => {
@@ -1311,6 +1336,25 @@ export default function App() {
                       onDeleteVehicle={handleDeleteVehicleDirect}
                       onDeleteTikTokPost={handleDeleteTikTokPostDirect}
                       onResetDefaults={handleResetDefaults}
+                      onImportFromFirebase={
+                        isCloudflareBackendEnabled()
+                          ? async (onProgress) => {
+                              const imported = await importMobileAppDataToCloudflare(
+                                storeRef.current,
+                                onProgress
+                              );
+                              storeRef.current = imported.store;
+                              lastSyncedStoreRef.current = imported.store;
+                              setStore(imported.store);
+                              setSaveState('saved');
+                              setSaveError(null);
+                              return {
+                                vehicleCount: imported.vehicleCount,
+                                tiktokCount: imported.tiktokCount,
+                              };
+                            }
+                          : undefined
+                      }
                       onSignOut={() => void handleLogoutAdmin()}
                       onPublishAndView={async (sectionId) => {
                         if (saveTimerRef.current) {

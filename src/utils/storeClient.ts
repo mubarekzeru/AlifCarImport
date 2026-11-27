@@ -8,11 +8,23 @@ import { INITIAL_SHOWROOM_STORE } from '../data/seedData';
 import { app, auth, formatFirestoreUserMessage, googleProvider } from '../firebase';
 import type { CustomerInquiry, ShowroomStore } from '../types/showroom';
 import {
+  deleteTikTokPostFromCloudflare,
+  deleteVehicleFromCloudflare,
+  fetchAdminAllowlistFromCloudflare,
+  fetchInquiriesFromCloudflare,
+  isCloudflareBackendEnabled,
+  migrateShowroomStoreToCloudflare,
+  resetCloudflareToDefaults,
+  submitInquiryToCloudflare,
+  syncShowroomStoreToCloudflare,
+} from './cloudflareStore';
+import {
   checkFirestoreHasShowroom,
   deleteTikTokPostFromFirestore,
   deleteVehicleFromFirestore,
   fetchAdminAllowlistFromFirestore,
   fetchInquiriesFromFirestore,
+  fetchShowroomSnapshotFromFirestore,
   resetFirestoreToDefaults,
   submitInquiryToFirestore,
   syncShowroomStoreToFirestore,
@@ -209,7 +221,9 @@ export async function signInAdminWithEmailPassword(
     );
   }
 
-  const remoteAllowlist = await fetchAdminAllowlistFromFirestore();
+  const remoteAllowlist = isCloudflareBackendEnabled()
+    ? await fetchAdminAllowlistFromCloudflare(user)
+    : await fetchAdminAllowlistFromFirestore();
   const combinedAllowlist = [...(extraAdminEmails ?? []), ...(remoteAllowlist ?? [])];
 
   if (!isAuthorizedAdminEmail(signedEmail, combinedAllowlist)) {
@@ -252,7 +266,9 @@ export async function signInAdminWithGoogle(
     throw new Error('A verified Google account email is required for admin access.');
   }
 
-  const remoteAllowlist = await fetchAdminAllowlistFromFirestore();
+  const remoteAllowlist = isCloudflareBackendEnabled()
+    ? await fetchAdminAllowlistFromCloudflare(user)
+    : await fetchAdminAllowlistFromFirestore();
   const combinedAllowlist = [
     ...(extraAdminEmails ?? []),
     ...(remoteAllowlist ?? []),
@@ -274,7 +290,9 @@ export async function checkFirebaseAdminUser(
     return { authenticated: false, email: null };
   }
 
-  const remoteAllowlist = await fetchAdminAllowlistFromFirestore();
+  const remoteAllowlist = isCloudflareBackendEnabled()
+    ? await fetchAdminAllowlistFromCloudflare(user)
+    : await fetchAdminAllowlistFromFirestore();
   const combinedAllowlist = [
     ...(extraAdminEmails ?? []),
     ...(remoteAllowlist ?? []),
@@ -287,18 +305,99 @@ export async function checkFirebaseAdminUser(
   return { authenticated: true, email: user.email };
 }
 
+export interface MobileAppImportResult {
+  store: ShowroomStore;
+  vehicleCount: number;
+  tiktokCount: number;
+  hasConfig: boolean;
+}
+
+export async function importMobileAppDataToCloudflare(
+  fallbackStore: ShowroomStore,
+  onProgress?: (status: string) => void
+): Promise<MobileAppImportResult> {
+  if (!auth.currentUser) {
+    throw new Error('Please sign in with an authorized admin account first.');
+  }
+  if (!isCloudflareBackendEnabled()) {
+    throw new Error('Cloudflare backend is not enabled.');
+  }
+
+  onProgress?.('Reading cars, photos, TikTok videos & details from Firebase (mobile app)...');
+  let snapshot;
+  try {
+    snapshot = await fetchShowroomSnapshotFromFirestore(fallbackStore);
+  } catch (err) {
+    const msg = formatFirestoreUserMessage(err);
+    const lower = msg.toLowerCase();
+    if (
+      lower.includes('quota') ||
+      lower.includes('resource-exhausted') ||
+      lower.includes('resource_exhausted') ||
+      lower.includes('429')
+    ) {
+      throw new Error(
+        'Firebase daily free read quota is still cooling down. Please tap "Import from Mobile App" again after Firebase resets (midnight US Pacific / 11:00 AM Ethiopia time) to copy all mobile app cars, photos, and TikTok videos automatically.'
+      );
+    }
+    throw new Error(msg);
+  }
+
+  if (!snapshot.hasConfig && snapshot.vehicleCount === 0 && snapshot.tiktokCount === 0) {
+    throw new Error('No cars, TikTok videos, or showroom settings were found in Firebase yet.');
+  }
+
+  const uploaded = await migrateShowroomStoreToCloudflare(snapshot.store, onProgress);
+  cacheShowroomStoreLocally(snapshot.store);
+
+  return {
+    store: snapshot.store,
+    vehicleCount: uploaded.vehicleCount,
+    tiktokCount: uploaded.tiktokCount,
+    hasConfig: snapshot.hasConfig,
+  };
+}
+
 export async function ensureFirestoreSeeded(
   seedStore: ShowroomStore,
   snapshotMeta?: {
     hasConfig: boolean;
+    remoteVehicles?: ShowroomStore['vehicles'];
   }
-): Promise<void> {
-  if (!auth.currentUser) return;
+): Promise<MobileAppImportResult | null> {
+  if (!auth.currentUser) return null;
+  if (isCloudflareBackendEnabled()) {
+    const cloudflareIsEmpty =
+      Boolean(snapshotMeta) &&
+      !snapshotMeta?.hasConfig &&
+      (snapshotMeta?.remoteVehicles?.length ?? 0) === 0;
+    if (cloudflareIsEmpty) {
+      try {
+        return await importMobileAppDataToCloudflare(seedStore);
+      } catch {
+        // Firebase daily quota may still be cooling down; seed the imported
+        // alifcarimport.com catalog into Cloudflare D1 so it is immediately live & editable.
+        if (seedStore.vehicles.length > 0) {
+          const uploaded = await migrateShowroomStoreToCloudflare(seedStore);
+          cacheShowroomStoreLocally(seedStore);
+          return {
+            store: seedStore,
+            vehicleCount: uploaded.vehicleCount,
+            tiktokCount: uploaded.tiktokCount,
+            hasConfig: true,
+          };
+        }
+        return null;
+      }
+    }
+    return null;
+  }
   const hasRemote =
     snapshotMeta !== undefined ? snapshotMeta.hasConfig : await checkFirestoreHasShowroom();
   if (!hasRemote) {
     await syncShowroomStoreToFirestore(seedStore, null, true);
   }
+  return null;
 }
 
 export async function logoutAdmin(): Promise<void> {
@@ -326,8 +425,12 @@ export async function saveShowroomStore(
   }
 
   try {
-    await syncShowroomStoreToFirestore(store, prevStore, false);
-    // Only update the browser's local cache AFTER Firestore confirms the cloud write
+    if (isCloudflareBackendEnabled()) {
+      await syncShowroomStoreToCloudflare(store, prevStore, false);
+    } else {
+      await syncShowroomStoreToFirestore(store, prevStore, false);
+    }
+    // Only update the browser's local cache AFTER the cloud write succeeds
     cacheShowroomStoreLocally(store);
   } catch (err) {
     throw new Error(formatFirestoreUserMessage(err));
@@ -343,7 +446,11 @@ export async function deleteVehicleFromStore(
   }
 
   try {
-    await deleteVehicleFromFirestore(vehicleId);
+    if (isCloudflareBackendEnabled()) {
+      await deleteVehicleFromCloudflare(vehicleId);
+    } else {
+      await deleteVehicleFromFirestore(vehicleId);
+    }
     cacheShowroomStoreLocally(nextStore);
   } catch (err) {
     throw new Error(formatFirestoreUserMessage(err));
@@ -359,7 +466,11 @@ export async function deleteTikTokPostFromStore(
   }
 
   try {
-    await deleteTikTokPostFromFirestore(postId);
+    if (isCloudflareBackendEnabled()) {
+      await deleteTikTokPostFromCloudflare(postId);
+    } else {
+      await deleteTikTokPostFromFirestore(postId);
+    }
     cacheShowroomStoreLocally(nextStore);
   } catch (err) {
     throw new Error(formatFirestoreUserMessage(err));
@@ -372,7 +483,11 @@ export async function resetShowroomStore(): Promise<ShowroomStore> {
   }
 
   try {
-    await resetFirestoreToDefaults();
+    if (isCloudflareBackendEnabled()) {
+      await resetCloudflareToDefaults();
+    } else {
+      await resetFirestoreToDefaults();
+    }
   } catch (err) {
     throw new Error(formatFirestoreUserMessage(err));
   }
@@ -395,6 +510,9 @@ export async function submitCustomerInquiry(input: {
   message: string;
 }): Promise<CustomerInquiry> {
   try {
+    if (isCloudflareBackendEnabled()) {
+      return await submitInquiryToCloudflare(input);
+    }
     return await submitInquiryToFirestore(input);
   } catch (err) {
     throw new Error(formatFirestoreUserMessage(err));
@@ -403,6 +521,9 @@ export async function submitCustomerInquiry(input: {
 
 export async function fetchCustomerInquiries(): Promise<CustomerInquiry[]> {
   try {
+    if (isCloudflareBackendEnabled()) {
+      return await fetchInquiriesFromCloudflare();
+    }
     return await fetchInquiriesFromFirestore();
   } catch {
     return [];

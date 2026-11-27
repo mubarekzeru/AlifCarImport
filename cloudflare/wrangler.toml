@@ -1,0 +1,22 @@
+name = "alif-car-import-api"
+main = "worker.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "alif-car-import"
+BOOTSTRAP_ADMIN_EMAIL = "alifcarimports@gmail.com"
+ALLOWED_ORIGINS = "*"
+# Optional: set to your R2 public domain (e.g. https://media.alifcarimport.com).
+# Leave empty to serve R2 media automatically through this Worker at /media/<key>.
+PUBLIC_MEDIA_BASE_URL = ""
+
+[[d1_databases]]
+binding = "DB"
+database_name = "alif-car-import-db"
+# Replace with the database_id printed when you run:
+#   npx wrangler d1 create alif-car-import-db
+database_id = "bd96612c-2c6f-4862-9823-745077d63e6c"
+
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "alif-car-import-media"

@@ -10,6 +10,12 @@ import {
   updateDoc,
   type Unsubscribe,
 } from 'firebase/firestore';
+import {
+  checkCloudflareSecurityForceSignOut,
+  isCloudflareBackendEnabled,
+  revokeCloudflareAdminSession,
+  upsertCloudflareAdminSession,
+} from './cloudflareStore';
 
 export const WEB_ADMIN_FIRESTORE_DB_ID =
   'ai-studio-alifcarportal-c5b73261-7322-4966-b5e2-59c51963e99b';
@@ -22,6 +28,7 @@ export interface WebAdminSessionOptions {
 
 let unsubscribeSessionWatch: Unsubscribe | null = null;
 let unsubscribeSecurityWatch: Unsubscribe | null = null;
+let cloudflarePollTimer: number | null = null;
 let activeWatchedSessionKey: string | null = null;
 let watchGeneration = 0;
 
@@ -173,6 +180,10 @@ export function stopWebSessionWatcher(): void {
     unsubscribeSecurityWatch();
     unsubscribeSecurityWatch = null;
   }
+  if (cloudflarePollTimer !== null && typeof window !== 'undefined') {
+    window.clearInterval(cloudflarePollTimer);
+    cloudflarePollTimer = null;
+  }
   activeWatchedSessionKey = null;
 }
 
@@ -215,6 +226,9 @@ export async function checkForceSignOutBySecurityConfig(
   options?: WebAdminSessionOptions
 ): Promise<boolean> {
   if (!user || !user.emailVerified) return false;
+  if (isCloudflareBackendEnabled()) {
+    return checkCloudflareSecurityForceSignOut(auth, user, options?.onForcedSignOut);
+  }
   try {
     const db = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
     const securitySnap = await getDoc(doc(db, 'config', 'security'));
@@ -248,6 +262,53 @@ export async function startWebAdminSession(
   const startGen = watchGeneration;
 
   try {
+    if (isCloudflareBackendEnabled()) {
+      if (!options?.skipInitialSecurityCheck) {
+        const forcedOut = await checkCloudflareSecurityForceSignOut(
+          auth,
+          user,
+          options?.onForcedSignOut
+        );
+        if (forcedOut || startGen !== watchGeneration) {
+          return false;
+        }
+      }
+
+      const now = Date.now();
+      await upsertCloudflareAdminSession(user, sessionId, {
+        deviceId,
+        deviceName: detectBrowserDeviceName(),
+        platform: 'Website',
+        location: getFallbackLocation(),
+        loginAtMillis: now,
+        status: 'active',
+        userAgent: (
+          typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
+        ).slice(0, 300),
+      });
+
+      if (startGen !== watchGeneration) return false;
+
+      if (activeWatchedSessionKey === watchKey && cloudflarePollTimer !== null) {
+        return true;
+      }
+
+      stopWebSessionWatcher();
+      const activeGen = watchGeneration;
+      activeWatchedSessionKey = watchKey;
+
+      if (typeof window !== 'undefined') {
+        cloudflarePollTimer = window.setInterval(() => {
+          if (activeGen !== watchGeneration) return;
+          void checkCloudflareSecurityForceSignOut(auth, user, () => {
+            stopWebSessionWatcher();
+            options?.onForcedSignOut?.();
+          });
+        }, 30_000);
+      }
+      return true;
+    }
+
     const db = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
     const securityRef = doc(db, 'config', 'security');
 
@@ -396,9 +457,13 @@ export async function endWebAdminSession(
   stopWebSessionWatcher();
   if (!user) return;
   try {
-    const db = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
     const deviceId = getOrCreateWebDeviceId().slice(0, 128);
     const sessionId = buildWebAdminSessionId(user.uid, deviceId);
+    if (isCloudflareBackendEnabled()) {
+      await revokeCloudflareAdminSession(user, sessionId);
+      return;
+    }
+    const db = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
     await updateDoc(doc(db, 'adminSessions', sessionId), {
       status: 'revoked',
       updatedAt: serverTimestamp(),
