@@ -19,7 +19,7 @@ import {
   ALIF_DEFAULT_LOGO,
   INITIAL_SHOWROOM_STORE,
 } from './data/seedData';
-import { app, auth, formatFirestoreUserMessage } from './firebase';
+import { app, auth, db, formatFirestoreUserMessage } from './firebase';
 import type { ShowroomStore, Vehicle, VehicleFilters, VehicleStatus } from './types/showroom';
 import {
   fetchAdminAllowlistFromFirestore,
@@ -52,6 +52,7 @@ import {
   startWebAdminSession,
   stopWebSessionWatcher,
 } from './utils/webAdminSessionSync';
+import { trackWebsiteVisit } from './utils/visitTracker';
 
 const INITIAL_FILTERS: VehicleFilters = {
   query: '',
@@ -606,6 +607,7 @@ export default function App() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    void trackWebsiteVisit(db);
   }, [location.pathname]);
 
   useEffect(() => {

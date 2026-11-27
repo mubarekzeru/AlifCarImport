@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import { INITIAL_SHOWROOM_STORE } from '../data/seedData';
 import type { TikTokPost, Vehicle } from '../types/showroom';
 import {
+  computeTikTokSortOrder,
   didTikTokPostChange,
   filterSyncableTikTokPosts,
+  getTikTokGridLayoutMetrics,
   mergeShowroomSnapshotState,
   resolveRemoteContact,
+  sortRemoteTikTokPostsNewestFirst,
 } from './firestoreSyncLogic';
 import { getConfiguredSocialLinks, normalizeExternalUrl } from './inventory';
 
@@ -73,7 +76,7 @@ test('mergeShowroomSnapshotState preserves fallback TikTok posts until postsLoad
   assert.equal(mergedBeforePosts.tiktok.posts.length, 1);
   assert.equal(mergedBeforePosts.tiktok.posts[0].id, 'tt_1');
 
-  // Once tiktokPosts snapshot DOES load, remote posts become authoritative (sorted by sortOrder)
+  // Once tiktokPosts snapshot DOES load, remote posts become authoritative (newest / highest sortOrder first)
   const mergedAfterPosts = mergeShowroomSnapshotState({
     fallbackStore: fallback,
     hasConfig: true,
@@ -82,15 +85,15 @@ test('mergeShowroomSnapshotState preserves fallback TikTok posts until postsLoad
     remoteVehicles: [SAMPLE_VEHICLE],
     postsLoaded: true,
     remotePosts: [
-      { ...SAMPLE_POST, id: 'tt_2', title: 'Second', sortOrder: 1 },
-      { ...SAMPLE_POST, id: 'tt_1', title: 'First', sortOrder: 0 },
+      { ...SAMPLE_POST, id: 'tt_1', title: 'Oldest', sortOrder: 0, updatedAtMillis: 1000 },
+      { ...SAMPLE_POST, id: 'tt_2', title: 'Newest', sortOrder: 1, updatedAtMillis: 2000 },
     ],
   });
 
   assert.ok(mergedAfterPosts);
   assert.deepEqual(
     mergedAfterPosts.tiktok.posts.map((p) => p.id),
-    ['tt_1', 'tt_2']
+    ['tt_2', 'tt_1']
   );
   assert.deepEqual(
     mergedAfterPosts.vehicles.map((v) => v.id),
@@ -314,4 +317,37 @@ test('didTikTokPostChange detects real metadata updates and skips no-op writes',
     didTikTokPostChange(SAMPLE_POST, { ...SAMPLE_POST, title: 'Updated Title' }),
     true
   );
+});
+
+test('sortRemoteTikTokPostsNewestFirst orders highest sortOrder first and tie-breaks by updatedAtMillis', () => {
+  const ordered = sortRemoteTikTokPostsNewestFirst([
+    { ...SAMPLE_POST, id: 'oldest', sortOrder: 0, updatedAtMillis: 1000 },
+    { ...SAMPLE_POST, id: 'tied_older', sortOrder: 5, updatedAtMillis: 2000 },
+    { ...SAMPLE_POST, id: 'newest', sortOrder: 7, updatedAtMillis: 4000 },
+    { ...SAMPLE_POST, id: 'tied_newer', sortOrder: 5, updatedAtMillis: 3000 },
+  ]);
+
+  assert.deepEqual(
+    ordered.map((p) => p.id),
+    ['newest', 'tied_newer', 'tied_older', 'oldest']
+  );
+});
+
+test('computeTikTokSortOrder assigns highest sortOrder to index 0 so web and mobile admin stay aligned', () => {
+  assert.equal(computeTikTokSortOrder(0, 8), 7);
+  assert.equal(computeTikTokSortOrder(7, 8), 0);
+  // Prepending 1 new post gives it sortOrder 8 while preserving 7..0 on existing posts
+  assert.equal(computeTikTokSortOrder(0, 9), 8);
+  assert.equal(computeTikTokSortOrder(1, 9), 7);
+  assert.equal(computeTikTokSortOrder(8, 9), 0);
+});
+
+test('getTikTokGridLayoutMetrics stacks 2 rows first and expands both rows equally horizontally', () => {
+  assert.deepEqual(getTikTokGridLayoutMetrics(0), { rows: 1, columns: 0, topRowCount: 0, bottomRowCount: 0 });
+  assert.deepEqual(getTikTokGridLayoutMetrics(1), { rows: 1, columns: 1, topRowCount: 1, bottomRowCount: 0 });
+  assert.deepEqual(getTikTokGridLayoutMetrics(2), { rows: 2, columns: 1, topRowCount: 1, bottomRowCount: 1 });
+  assert.deepEqual(getTikTokGridLayoutMetrics(6), { rows: 2, columns: 3, topRowCount: 3, bottomRowCount: 3 });
+  assert.deepEqual(getTikTokGridLayoutMetrics(8), { rows: 2, columns: 4, topRowCount: 4, bottomRowCount: 4 });
+  assert.deepEqual(getTikTokGridLayoutMetrics(9), { rows: 2, columns: 5, topRowCount: 5, bottomRowCount: 4 });
+  assert.deepEqual(getTikTokGridLayoutMetrics(10), { rows: 2, columns: 5, topRowCount: 5, bottomRowCount: 5 });
 });

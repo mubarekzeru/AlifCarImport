@@ -31,6 +31,7 @@ import {
   toCanonicalPublicAssetPath,
 } from './inventory';
 import {
+  computeTikTokSortOrder,
   filterSyncableTikTokPosts,
   mergeShowroomSnapshotState,
   type RemoteShowroomConfigData,
@@ -149,7 +150,7 @@ function buildVehicleDocPayload(vehicle: Vehicle) {
   return { id, payload };
 }
 
-function buildTikTokPostDocPayload(post: TikTokPost, index: number) {
+function buildTikTokPostDocPayload(post: TikTokPost, sortOrder: number) {
   const id = sanitizeDocId(post.id, 'tt');
   return {
     id,
@@ -159,7 +160,7 @@ function buildTikTokPostDocPayload(post: TikTokPost, index: number) {
       caption: clampStr(post.caption, 2000, ''),
       tiktokUrl: clampStr(post.tiktokUrl, 500, ''),
       coverImageUrl: clampStr(post.coverImageUrl, 550_000, ''),
-      sortOrder: Math.min(Math.max(index, 0), 1000),
+      sortOrder: Math.min(Math.max(sortOrder, 0), 1000),
       updatedAt: serverTimestamp(),
     },
   };
@@ -204,14 +205,14 @@ function vehicleFingerprint(vehicle: Vehicle): string {
   });
 }
 
-function postFingerprint(post: TikTokPost, index: number): string {
+function postFingerprint(post: TikTokPost, sortOrder: number): string {
   return JSON.stringify({
     id: post.id,
     title: post.title,
     caption: post.caption,
     tiktokUrl: post.tiktokUrl,
     coverImageUrl: post.coverImageUrl,
-    sortOrder: index,
+    sortOrder,
   });
 }
 
@@ -312,7 +313,10 @@ export async function syncShowroomStoreToFirestore(
   const nextSyncablePosts = filterSyncableTikTokPosts(nextStore.tiktok.posts);
 
   const prevPostsMap = new Map(
-    prevSyncablePosts.map((p, idx) => [p.id, { post: p, index: idx }])
+    prevSyncablePosts.map((p, idx) => [
+      p.id,
+      { post: p, sortOrder: computeTikTokSortOrder(idx, prevSyncablePosts.length) },
+    ])
   );
   const nextPostIds = new Set(
     nextSyncablePosts.flatMap((p) => [p.id, sanitizeDocId(p.id, 'tt')])
@@ -393,13 +397,14 @@ export async function syncShowroomStoreToFirestore(
   // Sync added/updated TikTok posts (skipping blank unsaved drafts)
   for (let i = 0; i < nextSyncablePosts.length; i++) {
     const post = nextSyncablePosts[i];
+    const nextSortOrder = computeTikTokSortOrder(i, nextSyncablePosts.length);
     const prevEntry = prevPostsMap.get(post.id);
     if (
       forceFullSync ||
       !prevEntry ||
-      postFingerprint(prevEntry.post, prevEntry.index) !== postFingerprint(post, i)
+      postFingerprint(prevEntry.post, prevEntry.sortOrder) !== postFingerprint(post, nextSortOrder)
     ) {
-      const { id, payload } = buildTikTokPostDocPayload(post, i);
+      const { id, payload } = buildTikTokPostDocPayload(post, nextSortOrder);
       try {
         await setDoc(doc(db, 'tiktokPosts', id), payload);
       } catch (err) {
@@ -578,6 +583,24 @@ export function subscribeShowroomFromFirestore(
       postsLoaded = true;
       remotePosts = snap.docs.map((d) => {
         const data = d.data() as Record<string, unknown>;
+        const rawUpdatedAt = data.updatedAt as
+          | { toMillis?: () => number; seconds?: number }
+          | number
+          | string
+          | undefined;
+        let updatedAtMillis = 0;
+        if (rawUpdatedAt && typeof rawUpdatedAt === 'object') {
+          if (typeof rawUpdatedAt.toMillis === 'function') {
+            updatedAtMillis = rawUpdatedAt.toMillis();
+          } else if (typeof rawUpdatedAt.seconds === 'number') {
+            updatedAtMillis = rawUpdatedAt.seconds * 1000;
+          }
+        } else if (typeof rawUpdatedAt === 'number' && Number.isFinite(rawUpdatedAt)) {
+          updatedAtMillis = rawUpdatedAt;
+        } else if (typeof rawUpdatedAt === 'string') {
+          const parsed = Date.parse(rawUpdatedAt);
+          if (Number.isFinite(parsed)) updatedAtMillis = parsed;
+        }
         return {
           id: d.id,
           title: String(data.title ?? ''),
@@ -585,6 +608,7 @@ export function subscribeShowroomFromFirestore(
           tiktokUrl: String(data.tiktokUrl ?? ''),
           coverImageUrl: String(data.coverImageUrl ?? ''),
           sortOrder: typeof data.sortOrder === 'number' ? data.sortOrder : 0,
+          updatedAtMillis,
         };
       });
       emitIfReady();

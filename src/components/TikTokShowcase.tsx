@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ExternalLink, Film, Loader2, Play, X } from 'lucide-react';
 import type { TikTokSectionConfig } from '../types/showroom';
+import { getTikTokGridLayoutMetrics } from '../utils/firestoreSyncLogic';
 import {
   buildSocialMediaUrl,
   deriveTitleFromVideoDescription,
@@ -31,7 +32,9 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
   const attemptedFetchRef = useRef<Record<string, string>>({});
   const isMountedRef = useRef(true);
   const trackRef = useRef<HTMLDivElement | null>(null);
+  const [canScrollHorizontally, setCanScrollHorizontally] = useState(false);
   const activePosts = filterActiveTikTokPosts(tiktok.posts);
+  const layoutMetrics = getTikTokGridLayoutMetrics(activePosts.length);
   const activePostsKey = activePosts
     .map((p) => `${p.id}|${p.tiktokUrl}|${p.coverImageUrl || ''}`)
     .join('||');
@@ -42,6 +45,29 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
       isMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) {
+      setCanScrollHorizontally(false);
+      return;
+    }
+
+    const measureOverflow = () => {
+      setCanScrollHorizontally(el.scrollWidth > el.clientWidth + 4);
+    };
+
+    measureOverflow();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measureOverflow);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener('resize', measureOverflow);
+    return () => window.removeEventListener('resize', measureOverflow);
+  }, [activePostsKey]);
 
   // Automatically resolve the real TikTok video cover page if any post has a missing, placeholder, or expired cover
   useEffect(() => {
@@ -121,7 +147,7 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
           </div>
 
           <div className="flex items-center gap-2.5 self-start sm:self-auto shrink-0">
-            {activePosts.length > 3 && (
+            {canScrollHorizontally && (
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
@@ -164,11 +190,11 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
 
         {activePosts.length === 0 ? (
           loading ? (
-            <div className="flex overflow-x-auto gap-2 sm:gap-4 pb-3">
-              {[1, 2, 3, 4].map((n) => (
+            <div className="grid grid-flow-col grid-rows-2 auto-cols-[calc((100%-1.25rem)/3)] sm:auto-cols-[205px] lg:auto-cols-[calc((100%-3rem)/4)] overflow-x-auto gap-2.5 sm:gap-4 pb-3">
+              {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
                 <div
                   key={n}
-                  className="shrink-0 w-[calc((100%-1rem)/3)] min-w-[112px] sm:w-[205px] lg:w-[235px] aspect-[9/15] rounded-xl bg-[#141418] border border-white/[0.08] animate-pulse"
+                  className="w-full aspect-[9/15] lg:aspect-[9/13.5] rounded-xl bg-[#141418] border border-white/[0.08] animate-pulse"
                 />
               ))}
             </div>
@@ -179,10 +205,10 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
           )
         ) : (
           <div className="space-y-3">
-            {activePosts.length > 3 && (
+            {canScrollHorizontally && (
               <p className="text-xs text-zinc-400 flex items-center justify-between">
                 <span>
-                  Showing portrait reels · Swipe horizontally to view all {activePosts.length} videos
+                  Newest reels first · Swipe horizontally to view all {activePosts.length} videos
                 </span>
                 <span className="hidden sm:inline font-medium text-zinc-300">
                   Use arrows or swipe →
@@ -193,7 +219,17 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
             <div
               ref={trackRef}
               data-testid="tiktok-carousel"
-              className="flex overflow-x-auto overscroll-x-contain snap-x snap-mandatory gap-2 sm:gap-4 pb-3 scroll-smooth"
+              data-rows={layoutMetrics.rows}
+              data-columns={layoutMetrics.columns}
+              className={`grid grid-flow-col ${
+                layoutMetrics.rows === 2 ? 'grid-rows-2' : 'grid-rows-1'
+              } ${
+                layoutMetrics.columns === 1
+                  ? 'auto-cols-[200px] sm:auto-cols-[240px] lg:auto-cols-[260px]'
+                  : layoutMetrics.columns === 2
+                  ? 'auto-cols-[calc((100%-0.625rem)/2)] sm:auto-cols-[225px] lg:auto-cols-[260px]'
+                  : 'auto-cols-[calc((100%-1.25rem)/3)] sm:auto-cols-[205px] lg:auto-cols-[calc((100%-3rem)/4)]'
+              } overflow-x-auto overscroll-x-contain snap-x snap-mandatory gap-2.5 sm:gap-4 pb-3 scroll-smooth`}
             >
               {activePosts.map((post) => {
                 const resolved = resolvedByPostId[post.id];
@@ -214,13 +250,6 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
                     ? deriveTitleFromVideoDescription(post.caption) || resolved?.title || trimmedTitle
                     : trimmedTitle;
                 const displayTitle = derivedTitle || 'Alif Car Import Reel';
-
-                const cardWidthClass =
-                  activePosts.length === 1
-                    ? 'w-[200px] sm:w-[250px] lg:w-[270px]'
-                    : activePosts.length === 2
-                    ? 'w-[calc((100%-0.5rem)/2)] min-w-[148px] sm:w-[240px] lg:w-[260px]'
-                    : 'w-[calc((100%-1rem)/3)] min-w-[112px] sm:w-[205px] lg:w-[235px]';
 
                 const cardOverlayContent = (
                   <>
@@ -278,11 +307,11 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
                   <article
                     key={post.id}
                     data-testid={`tiktok-card-${post.id}`}
-                    className={`group shrink-0 snap-start ${cardWidthClass} bg-[#141418] border border-white/[0.08] rounded-xl overflow-hidden transition-[transform,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1 hover:border-white/25 hover:shadow-[0_14px_30px_rgba(0,0,0,0.45)]`}
+                    className="group w-full snap-start bg-[#141418] border border-white/[0.08] rounded-xl overflow-hidden transition-[transform,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1 hover:border-white/25 hover:shadow-[0_14px_30px_rgba(0,0,0,0.45)]"
                   >
                     <div
                       data-testid={`tiktok-media-${post.id}`}
-                      className="relative aspect-[9/15] w-full bg-zinc-950 overflow-hidden"
+                      className="relative aspect-[9/15] lg:aspect-[9/13.5] w-full bg-zinc-950 overflow-hidden"
                     >
                       {isPlayingInline && videoId ? (
                         <>

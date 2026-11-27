@@ -292,6 +292,67 @@
         }
       },
       "required": ["id", "name", "phone", "vehicleTitle", "message", "createdAt"]
+    },
+    "PageVisit": {
+      "title": "PageVisit",
+      "description": "Anonymous public showroom page visit analytics record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Visit document ID."
+        },
+        "page": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Visited public pathname."
+        },
+        "visitorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Persistent anonymous browser visitor identifier."
+        },
+        "dateKey": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "description": "UTC date bucket in YYYY-MM-DD format."
+        },
+        "referrer": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Truncated HTTP referrer."
+        },
+        "userAgent": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Truncated browser user agent."
+        },
+        "timestampMillis": {
+          "type": "number",
+          "description": "Client epoch timestamp in milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when visit was recorded."
+        }
+      },
+      "required": [
+        "id",
+        "page",
+        "visitorId",
+        "dateKey",
+        "referrer",
+        "userAgent",
+        "timestampMillis",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -318,6 +379,10 @@
     "/inquiries/{inquiryId}": {
       "schema": { "$ref": "#/entities/CustomerInquiry" },
       "description": "Write-once customer inquiries readable only by verified administrators."
+    },
+    "/pageVisits/{visitId}": {
+      "schema": { "$ref": "#/entities/PageVisit" },
+      "description": "Public showroom visitor analytics events readable only by verified administrators."
     }
   }
 }

@@ -21,6 +21,58 @@ export interface RemoteShowroomConfigData {
 
 export interface RemoteTikTokPostEntry extends TikTokPost {
   sortOrder: number;
+  updatedAtMillis?: number;
+}
+
+export interface TikTokGridLayoutMetrics {
+  rows: 1 | 2;
+  columns: number;
+  topRowCount: number;
+  bottomRowCount: number;
+}
+
+/**
+ * Computes the Firestore sortOrder for a newest-first ordered TikTok posts array
+ * so the newest post (index 0) receives the highest sortOrder (totalCount - 1),
+ * matching the companion Android Admin app's incrementing sortOrder convention.
+ */
+export function computeTikTokSortOrder(index: number, totalCount: number): number {
+  const raw = totalCount - 1 - index;
+  return Math.min(Math.max(raw, 0), 1000);
+}
+
+/**
+ * Orders remote TikTok posts newest-first: highest sortOrder first,
+ * tie-breaking by most recent updatedAt timestamp.
+ */
+export function sortRemoteTikTokPostsNewestFirst(
+  remotePosts: RemoteTikTokPostEntry[]
+): TikTokPost[] {
+  return [...remotePosts]
+    .sort((a, b) => {
+      if (b.sortOrder !== a.sortOrder) {
+        return b.sortOrder - a.sortOrder;
+      }
+      return (b.updatedAtMillis ?? 0) - (a.updatedAtMillis ?? 0);
+    })
+    .map(({ sortOrder: _sortOrder, updatedAtMillis: _updatedAtMillis, ...post }) => post);
+}
+
+/**
+ * Computes balanced 2-row horizontal grid counts so TikTok reels stack a second row
+ * underneath first and expand horizontally across both rows equally.
+ */
+export function getTikTokGridLayoutMetrics(postCount: number): TikTokGridLayoutMetrics {
+  if (postCount <= 0) {
+    return { rows: 1, columns: 0, topRowCount: 0, bottomRowCount: 0 };
+  }
+  if (postCount === 1) {
+    return { rows: 1, columns: 1, topRowCount: 1, bottomRowCount: 0 };
+  }
+  const columns = Math.ceil(postCount / 2);
+  const topRowCount = columns;
+  const bottomRowCount = postCount - topRowCount;
+  return { rows: 2, columns, topRowCount, bottomRowCount };
 }
 
 export interface ShowroomSnapshotInput {
@@ -146,9 +198,7 @@ export function mergeShowroomSnapshotState(
   const resolvedVehicles = vehiclesLoaded ? remoteVehicles : base.vehicles;
 
   const resolvedPosts = postsLoaded
-    ? [...remotePosts]
-        .sort((a, b) => a.sortOrder - b.sortOrder)
-        .map(({ sortOrder: _sortOrder, ...post }) => post)
+    ? sortRemoteTikTokPostsNewestFirst(remotePosts)
     : base.tiktok.posts;
 
   const remoteTikTok = configData?.tiktok;
