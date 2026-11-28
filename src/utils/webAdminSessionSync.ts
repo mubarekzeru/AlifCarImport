@@ -286,61 +286,59 @@ export async function checkForceSignOutBySecurityConfig(
 
 /**
  * Reads 2FA / Authenticator settings saved by the companion Android app in Firestore
- * (checks config/security, config/twoFactor, and admins/{uid} on the shared DB).
+ * (checks config/security and admins/{uid} in parallel on the shared DB with a fast timeout).
  */
 export async function readFirestoreAppTwoFactorConfig(
   firebaseApp: FirebaseApp,
-  user: User | null | undefined
+  user: User | null | undefined,
+  timeoutMs = 2500
 ): Promise<ExtractedTwoFactorConfig> {
+  const empty: ExtractedTwoFactorConfig = { enabled: false, secret: '', backupCodes: [] };
   if (!user || !user.emailVerified) {
-    return { enabled: false, secret: '', backupCodes: [] };
+    return empty;
   }
 
-  const dbCandidates = [
-    () => getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID),
-    () => getFirestore(firebaseApp),
-  ];
+  let targetDb;
+  try {
+    targetDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+  } catch {
+    return empty;
+  }
 
-  const docPaths: [string, string][] = [
-    ['config', 'security'],
-    ['admins', user.uid],
-    ['users', user.uid],
-    ['config', 'twoFactor'],
-  ];
+  const readPromise = (async (): Promise<ExtractedTwoFactorConfig> => {
+    const docPaths: [string, string][] = [
+      ['config', 'security'],
+      ['admins', user.uid],
+      ['users', user.uid],
+    ];
+    const results = await Promise.allSettled(
+      docPaths.map(([col, id]) => getDoc(doc(targetDb, col, id)))
+    );
 
-  let enabled = false;
-  let secret = '';
-  const backupCodes: string[] = [];
+    let enabled = false;
+    let secret = '';
+    const backupCodes: string[] = [];
 
-  for (const getDb of dbCandidates) {
-    let targetDb;
-    try {
-      targetDb = getDb();
-    } catch {
-      continue;
-    }
-
-    for (const [col, id] of docPaths) {
-      try {
-        const snap = await getDoc(doc(targetDb, col, id));
-        if (!snap.exists()) continue;
-        const extracted = extractAppTwoFactorConfig(snap.data() as Record<string, unknown>);
-        if (extracted.enabled) enabled = true;
-        if (!secret && extracted.secret) secret = extracted.secret;
-        for (const c of extracted.backupCodes) {
-          if (!backupCodes.includes(c)) backupCodes.push(c);
-        }
-        if (enabled && secret) {
-          return { enabled, secret, backupCodes };
-        }
-      } catch {
-        // Ignore missing permissions or absent docs on candidate paths
+    for (const res of results) {
+      if (res.status !== 'fulfilled' || !res.value.exists()) continue;
+      const extracted = extractAppTwoFactorConfig(
+        res.value.data() as Record<string, unknown>
+      );
+      if (extracted.enabled) enabled = true;
+      if (!secret && extracted.secret) secret = extracted.secret;
+      for (const c of extracted.backupCodes) {
+        if (!backupCodes.includes(c)) backupCodes.push(c);
       }
     }
-    if (enabled || secret) break;
-  }
 
-  return { enabled, secret, backupCodes };
+    return { enabled, secret, backupCodes };
+  })();
+
+  const timeoutPromise = new Promise<ExtractedTwoFactorConfig>((resolve) => {
+    setTimeout(() => resolve(empty), timeoutMs);
+  });
+
+  return Promise.race([readPromise, timeoutPromise]);
 }
 
 /**

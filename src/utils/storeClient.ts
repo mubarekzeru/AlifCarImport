@@ -299,12 +299,18 @@ async function evaluateAuthenticatedUserLogin(
   const location = getFallbackLocation();
   const userAgent = (typeof navigator !== 'undefined' ? navigator.userAgent || '' : '').slice(0, 300);
 
-  const remoteAllowlist = isCloudflareBackendEnabled()
-    ? await fetchAdminAllowlistFromCloudflare(user)
-    : await fetchAdminAllowlistFromFirestore();
-  const combinedAllowlist = [...(extraAdminEmails ?? []), ...(remoteAllowlist ?? [])];
+  let isAllowed = isAuthorizedAdminEmail(signedEmail, extraAdminEmails);
+  if (!isAllowed) {
+    const remoteAllowlist = isCloudflareBackendEnabled()
+      ? await fetchAdminAllowlistFromCloudflare(user)
+      : await fetchAdminAllowlistFromFirestore();
+    isAllowed = isAuthorizedAdminEmail(signedEmail, [
+      ...(extraAdminEmails ?? []),
+      ...(remoteAllowlist ?? []),
+    ]);
+  }
 
-  if (!isAuthorizedAdminEmail(signedEmail, combinedAllowlist)) {
+  if (!isAllowed) {
     if (isCloudflareBackendEnabled()) {
       try {
         const alertRes = await reportUnauthorizedLoginAttempt(user, {
@@ -334,8 +340,14 @@ async function evaluateAuthenticatedUserLogin(
     }
   }
 
-  let cloudflareRequiresVerification: AdminSignInOutcome | null = null;
-  if (isCloudflareBackendEnabled()) {
+  // Run Cloudflare login-security check AND companion app Firestore 2FA check IN PARALLEL
+  const cfCheckPromise = (async (): Promise<{
+    outcome: Extract<AdminSignInOutcome, { status: 'requires_verification' }> | null;
+    fatalError: Error | null;
+  }> => {
+    if (!isCloudflareBackendEnabled()) {
+      return { outcome: null, fatalError: null };
+    }
     const sessionId = buildWebAdminSessionId(user.uid, deviceId);
     try {
       const startRes = await startCloudflareAdminLogin(user, {
@@ -347,57 +359,72 @@ async function evaluateAuthenticatedUserLogin(
         userAgent,
       });
       if (startRes.status === 'requires_verification' && startRes.challengeId) {
-        cloudflareRequiresVerification = {
-          status: 'requires_verification',
-          email: signedEmail,
-          uid: user.uid,
-          challengeId: startRes.challengeId,
-          alertId: startRes.alertId,
-          hasTotp: Boolean(startRes.hasTotp),
-          twoFactorEnabled: Boolean(startRes.twoFactorEnabled),
-          requireDeviceApproval: Boolean(startRes.requireDeviceApproval),
-          hasOtherDevices: Boolean(startRes.hasOtherDevices),
+        return {
+          outcome: {
+            status: 'requires_verification',
+            email: signedEmail,
+            uid: user.uid,
+            challengeId: startRes.challengeId,
+            alertId: startRes.alertId,
+            hasTotp: Boolean(startRes.hasTotp),
+            twoFactorEnabled: Boolean(startRes.twoFactorEnabled),
+            requireDeviceApproval: Boolean(startRes.requireDeviceApproval),
+            hasOtherDevices: Boolean(startRes.hasOtherDevices),
+          },
+          fatalError: null,
         };
       }
+      return { outcome: null, fatalError: null };
     } catch (err) {
       const status = (err as { status?: number })?.status;
       if (status === 401 || status === 403) {
-        await signOut(auth).catch(() => undefined);
-        throw err instanceof Error ? err : new Error('Admin login verification failed.');
-      }
-      // If the remote Worker has not been updated to v2 yet (404), continue to Firestore 2FA check
-    }
-  }
-
-  // Always check companion Android app's Firestore 2FA / Authenticator setup too
-  if (!options?.skipFirestoreTotpCheck) {
-    const appTwoFactor = await readFirestoreAppTwoFactorConfig(app, user).catch(
-      (): ExtractedTwoFactorConfig => ({ enabled: false, secret: '', backupCodes: [] })
-    );
-    if (appTwoFactor.enabled && (appTwoFactor.secret || appTwoFactor.backupCodes.length > 0)) {
-      pendingFirestoreTotp = {
-        uid: user.uid,
-        email: signedEmail,
-        config: appTwoFactor,
-      };
-      if (cloudflareRequiresVerification) {
         return {
-          ...cloudflareRequiresVerification,
-          hasTotp: true,
-          twoFactorEnabled: true,
+          outcome: null,
+          fatalError: err instanceof Error ? err : new Error('Admin login verification failed.'),
         };
       }
+      return { outcome: null, fatalError: null };
+    }
+  })();
+
+  const firestoreCheckPromise: Promise<ExtractedTwoFactorConfig> = options?.skipFirestoreTotpCheck
+    ? Promise.resolve({ enabled: false, secret: '', backupCodes: [] })
+    : readFirestoreAppTwoFactorConfig(app, user, 2500).catch(
+        (): ExtractedTwoFactorConfig => ({ enabled: false, secret: '', backupCodes: [] })
+      );
+
+  const [cfResult, appTwoFactor] = await Promise.all([cfCheckPromise, firestoreCheckPromise]);
+
+  if (cfResult.fatalError) {
+    await signOut(auth).catch(() => undefined);
+    throw cfResult.fatalError;
+  }
+
+  const cloudflareRequiresVerification = cfResult.outcome;
+
+  if (appTwoFactor.enabled && (appTwoFactor.secret || appTwoFactor.backupCodes.length > 0)) {
+    pendingFirestoreTotp = {
+      uid: user.uid,
+      email: signedEmail,
+      config: appTwoFactor,
+    };
+    if (cloudflareRequiresVerification) {
       return {
-        status: 'requires_verification',
-        email: signedEmail,
-        uid: user.uid,
-        challengeId: 'firestore_totp',
+        ...cloudflareRequiresVerification,
         hasTotp: true,
         twoFactorEnabled: true,
-        requireDeviceApproval: false,
-        hasOtherDevices: false,
       };
     }
+    return {
+      status: 'requires_verification',
+      email: signedEmail,
+      uid: user.uid,
+      challengeId: 'firestore_totp',
+      hasTotp: true,
+      twoFactorEnabled: true,
+      requireDeviceApproval: false,
+      hasOtherDevices: false,
+    };
   }
 
   if (cloudflareRequiresVerification) {

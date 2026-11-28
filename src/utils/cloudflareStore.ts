@@ -162,21 +162,46 @@ async function getFirebaseAdminBearerHeaders(userOverride?: User | null): Promis
 
 async function cloudflareFetchJson<T>(
   path: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  timeoutMs = 12_000
 ): Promise<T> {
   const url = buildCloudflareEndpoint(path);
-  const res = await fetch(url, init);
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) {
-    const msg =
-      typeof data.error === 'string' && data.error.trim()
-        ? data.error
-        : `Cloudflare API request failed (${res.status}).`;
-    const err = new Error(msg) as Error & { status?: number };
-    err.status = res.status;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer =
+    controller && timeoutMs > 0
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: init.signal ?? controller?.signal,
+    });
+    const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+    if (!res.ok) {
+      const msg =
+        typeof data.error === 'string' && data.error.trim()
+          ? data.error
+          : `Cloudflare API request failed (${res.status}).`;
+      const err = new Error(msg) as Error & { status?: number };
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      const timeoutErr = new Error('Request timed out. Please try again.') as Error & {
+        status?: number;
+      };
+      timeoutErr.status = 408;
+      throw timeoutErr;
+    }
     throw err;
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
   }
-  return data;
 }
 
 function notifyCloudflareShowroomChanged(): void {
@@ -262,10 +287,14 @@ export async function fetchAdminAllowlistFromCloudflare(
 ): Promise<string[] | null> {
   try {
     const headers = await getFirebaseAdminBearerHeaders(userOverride);
-    const res = await cloudflareFetchJson<{ adminEmails?: unknown }>('/api/admin/access', {
-      method: 'GET',
-      headers,
-    });
+    const res = await cloudflareFetchJson<{ adminEmails?: unknown }>(
+      '/api/admin/access',
+      {
+        method: 'GET',
+        headers,
+      },
+      3500
+    );
     if (Array.isArray(res.adminEmails)) {
       return res.adminEmails.filter((e): e is string => typeof e === 'string' && Boolean(e.trim()));
     }
@@ -812,11 +841,15 @@ export async function startCloudflareAdminLogin(
   }
 ): Promise<CloudflareStartLoginResult> {
   const headers = await getFirebaseAdminBearerHeaders(user);
-  return cloudflareFetchJson<CloudflareStartLoginResult>('/api/admin/security/start-login', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
+  return cloudflareFetchJson<CloudflareStartLoginResult>(
+    '/api/admin/security/start-login',
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    },
+    3500
+  );
 }
 
 export async function verifyCloudflareAuthCode(
