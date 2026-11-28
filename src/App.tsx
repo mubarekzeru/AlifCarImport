@@ -60,6 +60,7 @@ import {
   type AdminSignInOutcome,
 } from './utils/storeClient';
 import {
+  checkFirestoreAdminAuthorization,
   checkForceSignOutBySecurityConfig,
   isWebAdminSessionVerified,
   startWebAdminSession,
@@ -715,13 +716,22 @@ export default function App() {
       if (user?.email && user.emailVerified && isWebAdminSessionVerified(user.uid)) {
         let allowed = isAuthorizedAdminEmail(user.email, storeRef.current.adminEmails);
         if (!allowed) {
-          const remoteAllowlist = isCloudflareBackendEnabled()
-            ? await fetchAdminAllowlistFromCloudflare(user)
-            : await fetchAdminAllowlistFromFirestore();
-          allowed = isAuthorizedAdminEmail(user.email, [
-            ...(storeRef.current.adminEmails ?? []),
-            ...(remoteAllowlist ?? []),
+          const [remoteAllowlist, fsAuth] = await Promise.all([
+            isCloudflareBackendEnabled()
+              ? fetchAdminAllowlistFromCloudflare(user).catch(() => [] as string[])
+              : fetchAdminAllowlistFromFirestore().catch(() => [] as string[]),
+            checkFirestoreAdminAuthorization(app, user, user.email, 2500).catch(() => ({
+              authorized: false,
+              adminEmails: [] as string[],
+            })),
           ]);
+          allowed =
+            fsAuth.authorized ||
+            isAuthorizedAdminEmail(user.email, [
+              ...(storeRef.current.adminEmails ?? []),
+              ...(remoteAllowlist ?? []),
+              ...(fsAuth.adminEmails ?? []),
+            ]);
         }
         if (!active) return;
         if (allowed) {

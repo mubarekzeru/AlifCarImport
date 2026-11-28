@@ -19,12 +19,12 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { app, auth } from '../firebase';
 import type { CustomerInquiry } from '../types/showroom';
 import {
   disableCloudflareTotp,
   enableCloudflareTotp,
   fetchCloudflareAdminSessions,
-  fetchCloudflareLoginAlerts,
   fetchCloudflareSecurityStatus,
   fetchCloudflareVisitorAnalytics,
   forceSignOutAllCloudflareDevices,
@@ -38,7 +38,19 @@ import {
   type CloudflareVisitorAnalytics,
 } from '../utils/cloudflareStore';
 import { fetchCustomerInquiries } from '../utils/storeClient';
-import { getOrCreateWebDeviceId } from '../utils/webAdminSessionSync';
+import {
+  buildOtpAuthUrl,
+  generateBase32Secret,
+  normalizeTotpSecret,
+  verifyTotpCode,
+} from '../utils/totp';
+import {
+  getOrCreateWebDeviceId,
+  readFirestoreSecurityDashboardData,
+  respondToFirestoreLoginAlert,
+  revokeFirestoreAdminSession,
+  saveFirestoreSecuritySettings,
+} from '../utils/webAdminSessionSync';
 
 function formatRelativeTime(ms: number): string {
   if (!ms || !Number.isFinite(ms)) return 'Just now';
@@ -150,7 +162,12 @@ export function AdminSecurityTab({
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   // TOTP Setup state
-  const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
+  const [totpSetup, setTotpSetup] = useState<{
+    secret: string;
+    otpauthUrl: string;
+    source: 'cloudflare' | 'firestore';
+  } | null>(null);
+  const [customSecretInput, setCustomSecretInput] = useState('');
   const [totpCode, setTotpCode] = useState('');
   const [copiedSecret, setCopiedSecret] = useState(false);
 
@@ -164,20 +181,42 @@ export function AdminSecurityTab({
     setLoading(true);
     setError(null);
     try {
-      const [sec, sess] = await Promise.all([
-        fetchCloudflareSecurityStatus(),
-        fetchCloudflareAdminSessions(),
+      const [cfRes, fsRes] = await Promise.allSettled([
+        Promise.all([fetchCloudflareSecurityStatus(), fetchCloudflareAdminSessions()]),
+        readFirestoreSecurityDashboardData(app, auth.currentUser),
       ]);
-      setSecurity(sec);
-      setSessions(sess.sessions);
-      setActiveCount(sess.activeCount);
-      await onAlertsUpdated();
+
+      if (cfRes.status === 'fulfilled') {
+        const [sec, sess] = cfRes.value;
+        const fsData = fsRes.status === 'fulfilled' ? fsRes.value : null;
+        const mergedSessionsMap = new Map<string, CloudflareAdminSession>();
+        for (const s of sess.sessions) mergedSessionsMap.set(s.id, s);
+        if (fsData) {
+          for (const s of fsData.sessions) {
+            if (!mergedSessionsMap.has(s.id)) mergedSessionsMap.set(s.id, s);
+          }
+        }
+        const mergedSessions = Array.from(mergedSessionsMap.values()).sort(
+          (a, b) => b.lastActiveMillis - a.lastActiveMillis
+        );
+        setSecurity({
+          ...sec,
+          twoFactorEnabled: Boolean(sec.twoFactorEnabled || fsData?.security.twoFactorEnabled),
+          hasTotpSecret: Boolean(sec.hasTotpSecret || fsData?.security.hasTotpSecret),
+        });
+        setSessions(mergedSessions);
+        setActiveCount(mergedSessions.filter((s) => s.status === 'active').length);
+        await onAlertsUpdated();
+      } else if (fsRes.status === 'fulfilled') {
+        setSecurity(fsRes.value.security);
+        setSessions(fsRes.value.sessions);
+        setActiveCount(fsRes.value.activeCount);
+        await onAlertsUpdated();
+      } else {
+        throw new Error('Unable to load security settings right now.');
+      }
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to load security settings. Make sure the latest Cloudflare Worker is deployed.'
-      );
+      setError(err instanceof Error ? err.message : 'Unable to load security settings.');
     } finally {
       setLoading(false);
     }
@@ -195,8 +234,16 @@ export function AdminSecurityTab({
     setError(null);
     setNotice(null);
     try {
-      const updated = await updateCloudflareSecuritySettings({ [key]: nextVal });
-      setSecurity(updated);
+      let updated: CloudflareSecurityStatus | null = null;
+      try {
+        updated = await updateCloudflareSecuritySettings({ [key]: nextVal });
+      } catch {
+        // Fallback to Firestore
+      }
+      await saveFirestoreSecuritySettings(app, { [key]: nextVal }).catch(() => undefined);
+      setSecurity((prev) =>
+        updated ?? (prev ? { ...prev, [key]: nextVal } : prev)
+      );
       setNotice('Security setting saved.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update security setting.');
@@ -210,8 +257,19 @@ export function AdminSecurityTab({
     setError(null);
     setNotice(null);
     try {
-      const res = await setupCloudflareTotp();
-      setTotpSetup({ secret: res.secret, otpauthUrl: res.otpauthUrl });
+      try {
+        const res = await setupCloudflareTotp();
+        setTotpSetup({ secret: res.secret, otpauthUrl: res.otpauthUrl, source: 'cloudflare' });
+      } catch {
+        const secret = generateBase32Secret();
+        const email = auth.currentUser?.email || 'alifcarimports@gmail.com';
+        setTotpSetup({
+          secret,
+          otpauthUrl: buildOtpAuthUrl(secret, email),
+          source: 'firestore',
+        });
+      }
+      setCustomSecretInput('');
       setTotpCode('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to initialize 2FA authenticator setup.');
@@ -222,14 +280,35 @@ export function AdminSecurityTab({
 
   const handleEnableTotp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!totpSetup) return;
     setBusyAction('totp-enable');
     setError(null);
     setNotice(null);
     try {
-      await enableCloudflareTotp(totpCode.trim());
+      const cleanCode = totpCode.trim();
+      const customSecret = normalizeTotpSecret(customSecretInput);
+      const activeSecret = customSecret.length >= 16 ? customSecret : totpSetup.secret;
+
+      const validLocal = await verifyTotpCode(activeSecret, cleanCode);
+      if (!validLocal) {
+        throw new Error(
+          'Invalid 6-digit code. Check that the setup key in your Authenticator app matches and try again.'
+        );
+      }
+
+      if (totpSetup.source === 'cloudflare' && !customSecret) {
+        await enableCloudflareTotp(cleanCode).catch(() => undefined);
+      }
+
+      await saveFirestoreSecuritySettings(app, {
+        twoFactorEnabled: true,
+        totpSecret: activeSecret,
+      });
+
       setTotpSetup(null);
+      setCustomSecretInput('');
       setTotpCode('');
-      setNotice('Two-Factor Authentication (6-digit code) is now enabled for admin logins.');
+      setNotice('Two-Factor Authentication (6-digit code) is now enabled for all admin logins.');
       await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid 6-digit code.');
@@ -243,7 +322,10 @@ export function AdminSecurityTab({
     setError(null);
     setNotice(null);
     try {
-      await disableCloudflareTotp();
+      await Promise.allSettled([
+        disableCloudflareTotp(),
+        saveFirestoreSecuritySettings(app, { twoFactorEnabled: false, totpSecret: '' }),
+      ]);
       setTotpSetup(null);
       setNotice('Two-Factor Authentication disabled.');
       await loadData();
@@ -258,7 +340,10 @@ export function AdminSecurityTab({
     setBusyAction(`revoke-${session.id}`);
     setError(null);
     try {
-      await revokeCloudflareAdminSession(null, session.id);
+      await Promise.allSettled([
+        revokeCloudflareAdminSession(null, session.id),
+        revokeFirestoreAdminSession(app, session.id),
+      ]);
       if (session.deviceId === currentDeviceId) {
         onForceSignOutSelf();
         return;
@@ -276,7 +361,10 @@ export function AdminSecurityTab({
     setBusyAction('force-all');
     setError(null);
     try {
-      await forceSignOutAllCloudflareDevices();
+      await Promise.allSettled([
+        forceSignOutAllCloudflareDevices(),
+        saveFirestoreSecuritySettings(app, { forceSignOutAll: true }),
+      ]);
       onForceSignOutSelf();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign out all devices.');
@@ -287,8 +375,22 @@ export function AdminSecurityTab({
   const handleAlertDecision = async (alertId: string, decision: 'approved' | 'denied') => {
     setBusyAction(`alert-${alertId}`);
     setError(null);
+    const target = alerts.find((a) => a.id === alertId);
     try {
-      await respondToCloudflareLoginAlert(alertId, decision);
+      const [cfRes, fsRes] = await Promise.allSettled([
+        respondToCloudflareLoginAlert(alertId, decision),
+        respondToFirestoreLoginAlert(
+          app,
+          alertId,
+          decision,
+          target?.email,
+          target?.uid,
+          target?.alertType === 'unauthorized_email'
+        ),
+      ]);
+      if (cfRes.status === 'rejected' && fsRes.status === 'rejected') {
+        throw new Error('Unable to respond to alert.');
+      }
       setNotice(decision === 'approved' ? 'Approved login / granted access.' : 'Denied login attempt.');
       await loadData();
     } catch (err) {
@@ -443,6 +545,19 @@ export function AdminSecurityTab({
               <p className="text-[11px] text-zinc-400">
                 Account name: Alif Car Import · Type: Time-based (30 seconds, 6 digits).
               </p>
+              <div className="pt-2 space-y-1">
+                <label htmlFor="custom-totp-secret" className="block text-[11px] text-zinc-400">
+                  Already set up on your phone app? Paste your existing setup key here (optional):
+                </label>
+                <input
+                  id="custom-totp-secret"
+                  type="text"
+                  value={customSecretInput}
+                  onChange={(e) => setCustomSecretInput(e.target.value)}
+                  placeholder="Optional: paste existing Base32 key from mobile app"
+                  className="w-full max-w-md h-9 px-3 rounded-lg bg-[#141418] border border-zinc-700 font-mono text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A]"
+                />
+              </div>
             </div>
 
             <div className="space-y-1.5">

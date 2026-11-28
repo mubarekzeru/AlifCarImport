@@ -4,11 +4,31 @@ import {
   WEB_ADMIN_FIRESTORE_DB_ID,
   buildWebAdminSessionId,
   detectBrowserDeviceName,
+  extractEmailListFromDoc,
   extractFirestoreTimestampMillis,
   parseAuthTimeMillis,
   sanitizeSessionIdPart,
   shouldForceSignOutForSecurityTimestamp,
 } from './webAdminSessionSync';
+
+test('extractEmailListFromDoc extracts emails from arrays, object lists, and maps while skipping revoked entries', () => {
+  assert.deepEqual(
+    extractEmailListFromDoc({
+      adminEmails: ['Primary@Gmail.com', 'staff@alifcarimport.com'],
+      allowedEmails: [
+        { email: 'Active@Example.com', status: 'approved' },
+        { email: 'revoked@example.com', status: 'revoked' },
+        { email: 'blocked@example.com', revoked: true },
+      ],
+      members: {
+        'manager@example.com': true,
+        'denied@example.com': { status: 'denied' },
+      },
+    }),
+    ['primary@gmail.com', 'staff@alifcarimport.com', 'active@example.com', 'manager@example.com']
+  );
+  assert.deepEqual(extractEmailListFromDoc(undefined), []);
+});
 
 test('WEB_ADMIN_FIRESTORE_DB_ID matches the shared Firestore database ID', () => {
   assert.equal(

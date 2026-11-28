@@ -51,6 +51,7 @@ import {
   shouldAutoFetchTikTokCover,
 } from '../utils/inventory';
 import { didTikTokPostChange } from '../utils/firestoreSyncLogic';
+import { app, auth } from '../firebase';
 import {
   fetchCloudflareLoginAlerts,
   isCloudflareBackendEnabled,
@@ -58,6 +59,10 @@ import {
   type CloudflareLoginAlert,
 } from '../utils/cloudflareStore';
 import { fetchTikTokVideoMetadata } from '../utils/storeClient';
+import {
+  readFirestoreSecurityDashboardData,
+  respondToFirestoreLoginAlert,
+} from '../utils/webAdminSessionSync';
 import {
   AdminSecurityTab,
   AdminVisitorsTab,
@@ -141,9 +146,42 @@ export function AdminDashboard({
   const alertsInitializedRef = useRef(false);
 
   const refreshLoginAlerts = useCallback(async () => {
-    if (!isCloudflareBackendEnabled()) return;
     try {
-      const { alerts } = await fetchCloudflareLoginAlerts();
+      let alerts: CloudflareLoginAlert[] = [];
+      let loaded = false;
+
+      if (isCloudflareBackendEnabled()) {
+        try {
+          const cf = await fetchCloudflareLoginAlerts();
+          alerts = cf.alerts;
+          loaded = true;
+        } catch {
+          // Fall back to shared Firestore loginAlerts when Cloudflare Worker v2 isn't deployed
+        }
+      }
+
+      if (auth.currentUser) {
+        try {
+          const fsData = await readFirestoreSecurityDashboardData(app, auth.currentUser);
+          if (!loaded) {
+            alerts = fsData.alerts;
+            loaded = true;
+          } else if (fsData.alerts.length > 0) {
+            const byId = new Map<string, CloudflareLoginAlert>();
+            for (const a of alerts) byId.set(a.id, a);
+            for (const a of fsData.alerts) {
+              if (!byId.has(a.id)) byId.set(a.id, a);
+            }
+            alerts = Array.from(byId.values()).sort(
+              (a, b) => b.timestampMillis - a.timestampMillis
+            );
+          }
+        } catch {
+          // Ignore Firestore fallback failure
+        }
+      }
+
+      if (!loaded) return;
       setLoginAlerts(alerts);
 
       const pending = alerts.filter((a) => a.decision === 'pending');
@@ -178,7 +216,7 @@ export function AdminDashboard({
         }
       }
     } catch {
-      // Non-fatal if Worker is not yet updated
+      // Non-fatal
     }
   }, []);
 
@@ -192,15 +230,42 @@ export function AdminDashboard({
 
   const handleAlertDecision = async (alertId: string, decision: 'approved' | 'denied') => {
     setBusyAlertId(alertId);
+    const targetAlert = loginAlerts.find((a) => a.id === alertId);
     try {
-      const res = await respondToCloudflareLoginAlert(alertId, decision);
+      let grantedEmail: string | null | undefined = null;
+      let cfOk = false;
+
+      if (isCloudflareBackendEnabled()) {
+        try {
+          const res = await respondToCloudflareLoginAlert(alertId, decision);
+          grantedEmail = res.grantedEmail;
+          cfOk = true;
+        } catch {
+          // Fall back to Firestore below
+        }
+      }
+
+      const fsRes = await respondToFirestoreLoginAlert(
+        app,
+        alertId,
+        decision,
+        targetAlert?.email,
+        targetAlert?.uid,
+        targetAlert?.alertType === 'unauthorized_email'
+      ).catch(() => ({ ok: false, grantedEmail: null }));
+
+      if (!cfOk && !fsRes.ok) {
+        throw new Error('Unable to save login decision right now.');
+      }
+
+      const finalGranted = grantedEmail || fsRes.grantedEmail;
       await refreshLoginAlerts();
       setUploadNotice({
         type: 'success',
         message:
           decision === 'approved'
-            ? res.grantedEmail
-              ? `Granted admin access to ${res.grantedEmail}.`
+            ? finalGranted
+              ? `Granted admin access to ${finalGranted}.`
               : 'Login request approved.'
             : 'Login request denied and session blocked.',
       });

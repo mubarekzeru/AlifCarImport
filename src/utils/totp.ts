@@ -5,6 +5,33 @@
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
+export function generateBase32Secret(byteLength = 20): string {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  let bits = 0;
+  let value = 0;
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    value = (value << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out += BASE32_ALPHABET[(value >>> bits) & 31];
+    }
+  }
+  if (bits > 0) {
+    out += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  }
+  return out;
+}
+
+export function buildOtpAuthUrl(secretBase32: string, accountEmail: string, issuer = 'Alif Car Import'): string {
+  const cleanSecret = normalizeTotpSecret(secretBase32);
+  const label = encodeURIComponent(`${issuer}:${accountEmail || 'admin'}`);
+  const iss = encodeURIComponent(issuer);
+  return `otpauth://totp/${label}?secret=${cleanSecret}&issuer=${iss}&algorithm=SHA1&digits=6&period=30`;
+}
+
 export function normalizeTotpSecret(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   const trimmed = raw.trim();
@@ -22,7 +49,11 @@ export function normalizeTotpSecret(raw: unknown): string {
     }
   }
 
-  return trimmed.toUpperCase().replace(/[^A-Z2-7]/g, '');
+  // Reject values that clearly aren't Base32 secrets (like URLs, emails, sentences)
+  if (/[@:/\\]/.test(trimmed)) return '';
+  const stripped = trimmed.toUpperCase().replace(/[\s-=]/g, '');
+  if (!/^[A-Z2-7]+$/.test(stripped)) return '';
+  return stripped;
 }
 
 export function decodeBase32(base32: string): Uint8Array {
@@ -123,7 +154,11 @@ export interface ExtractedTwoFactorConfig {
 }
 
 function isTruthyFlag(val: unknown): boolean {
-  return val === true || val === 'true' || val === 1;
+  return val === true || val === 'true' || val === 1 || val === 'enabled' || val === 'active';
+}
+
+function isPlainRecord(val: unknown): val is Record<string, unknown> {
+  return Boolean(val && typeof val === 'object' && !Array.isArray(val));
 }
 
 function readStringArray(val: unknown): string[] {
@@ -135,48 +170,100 @@ function readStringArray(val: unknown): string[] {
 
 /**
  * Inspects a Firestore security document written by the companion Android app
- * (e.g. config/security or admins/{uid}) and extracts 2FA enabled status, TOTP secret,
- * and optional backup codes across common schema field names.
+ * (e.g. config/security, admins/{uid}, or per-user maps) and extracts 2FA enabled status,
+ * TOTP secret, and optional backup codes across common camelCase and snake_case field names.
  */
 export function extractAppTwoFactorConfig(
-  data: Record<string, unknown> | null | undefined
+  data: Record<string, unknown> | null | undefined,
+  uid?: string
 ): ExtractedTwoFactorConfig {
-  if (!data || typeof data !== 'object') {
+  if (!isPlainRecord(data)) {
     return { enabled: false, secret: '', backupCodes: [] };
   }
 
-  const nestedCandidates = [
-    data.twoFactor,
-    data.totp,
-    data.authenticator,
-    data.mfa,
-    data.security,
-  ].filter((obj): obj is Record<string, unknown> => Boolean(obj && typeof obj === 'object'));
+  const sources: Record<string, unknown>[] = [data];
+  const nestedKeys = [
+    'twoFactor',
+    'two_factor',
+    'totp',
+    'authenticator',
+    'mfa',
+    'security',
+    'auth',
+    'settings',
+  ];
+  for (const key of nestedKeys) {
+    if (isPlainRecord(data[key])) {
+      sources.push(data[key] as Record<string, unknown>);
+    }
+  }
 
-  const sources: Record<string, unknown>[] = [data, ...nestedCandidates];
+  if (uid) {
+    if (isPlainRecord(data[uid])) {
+      sources.push(data[uid] as Record<string, unknown>);
+    }
+    for (const mapKey of ['users', 'accounts', 'byUid', 'totpByUid', 'twoFactorByUid', 'secrets']) {
+      const container = data[mapKey];
+      if (isPlainRecord(container)) {
+        const entry = container[uid];
+        if (isPlainRecord(entry)) {
+          sources.push(entry);
+        } else if (typeof entry === 'string') {
+          const maybeSecret = normalizeTotpSecret(entry);
+          if (maybeSecret.length >= 16) {
+            sources.push({ totpSecret: maybeSecret });
+          }
+        }
+      }
+    }
+  }
 
   const enabledKeys = [
     'twoFactorEnabled',
+    'two_factor_enabled',
     'totpEnabled',
+    'totp_enabled',
     'authenticatorEnabled',
+    'authenticator_enabled',
     'mfaEnabled',
+    'mfa_enabled',
     'auth2faEnabled',
     'twoFactorAuthEnabled',
     'is2faEnabled',
+    'isTwoFactorEnabled',
+    'isTotpEnabled',
+    'isAuthenticatorEnabled',
+    'isMfaEnabled',
+    'twoStepEnabled',
+    'otpEnabled',
+    'gaEnabled',
     'require2fa',
     'requireAuthCode',
+    'requireTotp',
     'authenticatorConnected',
     'enabled',
   ];
 
   const secretKeys = [
     'totpSecret',
+    'totp_secret',
+    'totpSecretKey',
     'twoFactorSecret',
+    'two_factor_secret',
+    'twoFaSecret',
     'authenticatorSecret',
+    'authenticator_secret',
+    'authenticatorKey',
     'mfaSecret',
+    'mfa_secret',
     'otpSecret',
+    'authSecret',
+    'gaSecret',
+    'qrSecret',
     'base32Secret',
     'secretKey',
+    'secretBase32',
+    'totpKey',
     'secret',
     'otpauthUrl',
     'otpauthUri',
@@ -205,7 +292,25 @@ export function extractAppTwoFactorConfig(
         }
       }
     }
-    for (const k of ['backupCodes', 'recoveryCodes', 'twoFactorBackupCodes']) {
+    // Dynamic fallback: inspect any key mentioning secret/otpauth/totp with a valid Base32 value
+    if (!secret) {
+      for (const [k, v] of Object.entries(src)) {
+        if (typeof v !== 'string') continue;
+        const lowerKey = k.toLowerCase();
+        if (
+          lowerKey.includes('secret') ||
+          lowerKey.includes('otpauth') ||
+          (lowerKey.includes('totp') && !lowerKey.includes('enabled'))
+        ) {
+          const candidate = normalizeTotpSecret(v);
+          if (candidate.length >= 16) {
+            secret = candidate;
+            break;
+          }
+        }
+      }
+    }
+    for (const k of ['backupCodes', 'recoveryCodes', 'twoFactorBackupCodes', 'backup_codes']) {
       for (const code of readStringArray(src[k])) {
         if (!backupCodes.includes(code)) {
           backupCodes.push(code);

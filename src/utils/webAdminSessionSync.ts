@@ -1,13 +1,18 @@
 import type { FirebaseApp } from 'firebase/app';
 import { signOut, type Auth, type User } from 'firebase/auth';
 import {
+  collection,
   doc,
   getDoc,
+  getDocs,
   getFirestore,
+  limit,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   type Unsubscribe,
 } from 'firebase/firestore';
 import {
@@ -16,6 +21,9 @@ import {
   isCloudflareBackendEnabled,
   revokeCloudflareAdminSession,
   upsertCloudflareAdminSession,
+  type CloudflareAdminSession,
+  type CloudflareLoginAlert,
+  type CloudflareSecurityStatus,
 } from './cloudflareStore';
 import {
   extractAppTwoFactorConfig,
@@ -284,9 +292,215 @@ export async function checkForceSignOutBySecurityConfig(
   }
 }
 
+export function extractEmailListFromDoc(data: Record<string, unknown> | undefined): string[] {
+  if (!data || typeof data !== 'object') return [];
+  const out: string[] = [];
+  const addEmail = (raw: unknown) => {
+    if (typeof raw !== 'string') return;
+    const lower = raw.trim().toLowerCase();
+    if (lower.includes('@') && !out.includes(lower)) {
+      out.push(lower);
+    }
+  };
+
+  const keys = [
+    'adminEmails',
+    'allowedEmails',
+    'authorizedEmails',
+    'grantedEmails',
+    'approvedEmails',
+    'emails',
+    'admins',
+    'members',
+    'users',
+    'accessList',
+  ];
+
+  for (const key of keys) {
+    const val = data[key];
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        if (typeof item === 'string') {
+          addEmail(item);
+        } else if (item && typeof item === 'object') {
+          const obj = item as Record<string, unknown>;
+          const status = String(obj.status ?? obj.decision ?? '').toLowerCase();
+          const revoked =
+            obj.revoked === true ||
+            obj.disabled === true ||
+            status === 'revoked' ||
+            status === 'denied' ||
+            status === 'rejected';
+          if (!revoked) {
+            addEmail(obj.email ?? obj.adminEmail ?? obj.userEmail);
+          }
+        }
+      }
+    } else if (val && typeof val === 'object') {
+      for (const [mapKey, mapVal] of Object.entries(val as Record<string, unknown>)) {
+        if (mapKey.includes('@')) {
+          if (mapVal === true || mapVal === 'approved' || mapVal === 'active' || mapVal === 'admin') {
+            addEmail(mapKey);
+          } else if (mapVal && typeof mapVal === 'object') {
+            const mObj = mapVal as Record<string, unknown>;
+            const st = String(mObj.status ?? mObj.decision ?? '').toLowerCase();
+            if (mObj.revoked !== true && st !== 'revoked' && st !== 'denied') {
+              addEmail(mapKey);
+            }
+          }
+        } else if (mapVal && typeof mapVal === 'object') {
+          const mObj = mapVal as Record<string, unknown>;
+          const st = String(mObj.status ?? mObj.decision ?? '').toLowerCase();
+          if (mObj.revoked !== true && st !== 'revoked' && st !== 'denied') {
+            addEmail(mObj.email);
+          }
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Checks whether the signed-in user or email has been granted admin access on the
+ * companion mobile app across common Firestore documents, collections, and approved alerts.
+ */
+export async function checkFirestoreAdminAuthorization(
+  firebaseApp: FirebaseApp,
+  user: User | null | undefined,
+  email: string,
+  timeoutMs = 2500
+): Promise<{ authorized: boolean; adminEmails: string[] }> {
+  const empty = { authorized: false, adminEmails: [] as string[] };
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!user || !user.emailVerified || !normalizedEmail) {
+    return empty;
+  }
+
+  let targetDb;
+  try {
+    targetDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+  } catch {
+    return empty;
+  }
+
+  const checkPromise = (async (): Promise<{ authorized: boolean; adminEmails: string[] }> => {
+    const docPaths: [string, string][] = [
+      ['config', 'adminAccess'],
+      ['config', 'security'],
+      ['config', 'admins'],
+      ['config', 'access'],
+      ['admins', user.uid],
+      ['admins', normalizedEmail],
+      ['adminAccess', user.uid],
+      ['adminAccess', normalizedEmail],
+      ['authorizedAdmins', normalizedEmail],
+      ['allowedAdmins', normalizedEmail],
+      ['adminUsers', user.uid],
+      ['adminUsers', normalizedEmail],
+      ['users', user.uid],
+    ];
+
+    const [docResults, queryResults] = await Promise.all([
+      Promise.allSettled(docPaths.map(([col, id]) => getDoc(doc(targetDb, col, id)))),
+      Promise.allSettled([
+        getDocs(query(collection(targetDb, 'admins'), where('email', '==', normalizedEmail), limit(5))),
+        getDocs(query(collection(targetDb, 'allowedAdmins'), where('email', '==', normalizedEmail), limit(5))),
+        getDocs(query(collection(targetDb, 'loginAlerts'), where('email', '==', normalizedEmail), limit(10))),
+      ]),
+    ]);
+
+    const adminEmails: string[] = [];
+    let authorized = false;
+
+    docResults.forEach((res, idx) => {
+      if (res.status !== 'fulfilled' || !res.value.exists()) return;
+      const data = res.value.data() as Record<string, unknown>;
+      const [col] = docPaths[idx];
+
+      for (const em of extractEmailListFromDoc(data)) {
+        if (!adminEmails.includes(em)) adminEmails.push(em);
+      }
+      if (adminEmails.includes(normalizedEmail)) {
+        authorized = true;
+      }
+
+      if (
+        col === 'admins' ||
+        col === 'adminAccess' ||
+        col === 'authorizedAdmins' ||
+        col === 'allowedAdmins' ||
+        col === 'adminUsers'
+      ) {
+        const status = String(data.status ?? data.decision ?? '').toLowerCase();
+        const revoked =
+          data.revoked === true ||
+          data.disabled === true ||
+          status === 'revoked' ||
+          status === 'denied' ||
+          status === 'rejected';
+        if (!revoked) {
+          authorized = true;
+        }
+      }
+
+      if (col === 'users') {
+        const role = String(data.role ?? '').toLowerCase();
+        if (
+          role === 'admin' ||
+          role === 'owner' ||
+          data.isAdmin === true ||
+          data.adminAccess === true ||
+          data.accessGranted === true
+        ) {
+          authorized = true;
+        }
+      }
+    });
+
+    // Check collection queries (admins by email, allowedAdmins by email, approved loginAlerts)
+    queryResults.forEach((qRes, idx) => {
+      if (qRes.status !== 'fulfilled') return;
+      for (const snap of qRes.value.docs) {
+        const data = snap.data() as Record<string, unknown>;
+        const status = String(data.status ?? data.decision ?? '').toLowerCase();
+        if (idx === 0 || idx === 1) {
+          const revoked =
+            data.revoked === true ||
+            data.disabled === true ||
+            status === 'revoked' ||
+            status === 'denied' ||
+            status === 'rejected';
+          if (!revoked) {
+            authorized = true;
+          }
+        } else if (idx === 2) {
+          const isAccessReq =
+            String(data.alertType ?? data.type ?? '').includes('unauth') ||
+            String(data.type ?? '') === 'access_request' ||
+            data.requestAccess === true ||
+            snap.id.startsWith('unauth_');
+          if (isAccessReq && (status === 'approved' || status === 'granted')) {
+            authorized = true;
+          }
+        }
+      }
+    });
+
+    return { authorized, adminEmails };
+  })();
+
+  const timeoutPromise = new Promise<{ authorized: boolean; adminEmails: string[] }>((resolve) => {
+    setTimeout(() => resolve(empty), timeoutMs);
+  });
+
+  return Promise.race([checkPromise, timeoutPromise]);
+}
+
 /**
  * Reads 2FA / Authenticator settings saved by the companion Android app in Firestore
- * (checks config/security and admins/{uid} in parallel on the shared DB with a fast timeout).
+ * across common security document paths in parallel with a fast 2.5s timeout.
  */
 export async function readFirestoreAppTwoFactorConfig(
   firebaseApp: FirebaseApp,
@@ -308,6 +522,15 @@ export async function readFirestoreAppTwoFactorConfig(
   const readPromise = (async (): Promise<ExtractedTwoFactorConfig> => {
     const docPaths: [string, string][] = [
       ['config', 'security'],
+      ['config', 'adminAccess'],
+      ['config', 'twoFactor'],
+      ['config', 'totp'],
+      ['config', 'auth'],
+      ['security', 'config'],
+      ['security', 'totp'],
+      ['settings', 'security'],
+      ['adminSecurity', 'config'],
+      ['adminSecurity', user.uid],
       ['admins', user.uid],
       ['users', user.uid],
     ];
@@ -322,7 +545,8 @@ export async function readFirestoreAppTwoFactorConfig(
     for (const res of results) {
       if (res.status !== 'fulfilled' || !res.value.exists()) continue;
       const extracted = extractAppTwoFactorConfig(
-        res.value.data() as Record<string, unknown>
+        res.value.data() as Record<string, unknown>,
+        user.uid
       );
       if (extracted.enabled) enabled = true;
       if (!secret && extracted.secret) secret = extracted.secret;
@@ -339,6 +563,371 @@ export async function readFirestoreAppTwoFactorConfig(
   });
 
   return Promise.race([readPromise, timeoutPromise]);
+}
+
+/**
+ * Sends a pending admin access-grant alert to the shared Firestore database
+ * so the companion mobile app notifies the owner to Grant or Deny access.
+ */
+export async function createFirestoreAccessGrantRequest(
+  firebaseApp: FirebaseApp,
+  user: User,
+  payload: {
+    deviceId: string;
+    deviceName: string;
+    platform: string;
+    location: string;
+  }
+): Promise<{ ok: boolean; alertId: string }> {
+  const now = Date.now();
+  const alertId = `unauth_web_${sanitizeSessionIdPart(user.uid).slice(0, 10)}_${now.toString(36)}`;
+  const email = (user.email || '').trim().toLowerCase().slice(0, 254);
+
+  try {
+    const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+    const alertDoc = {
+      id: alertId,
+      sessionId: `unauth_${sanitizeSessionIdPart(payload.deviceId).slice(0, 16)}`,
+      uid: user.uid.slice(0, 128),
+      email,
+      deviceId: payload.deviceId.slice(0, 128),
+      deviceName: payload.deviceName.slice(0, 160),
+      platform: payload.platform.slice(0, 40),
+      location: payload.location.slice(0, 160),
+      timestampMillis: now,
+      decision: 'pending',
+      status: 'pending',
+      alertType: 'unauthorized_email',
+      type: 'access_request',
+      requestAccess: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    const writes = await Promise.allSettled([
+      setDoc(doc(sharedDb, 'loginAlerts', alertId), alertDoc),
+      setDoc(doc(sharedDb, 'adminAccessRequests', alertId), alertDoc),
+      setDoc(doc(sharedDb, 'accessRequests', alertId), alertDoc),
+    ]);
+
+    const anySucceeded = writes.some((w) => w.status === 'fulfilled');
+    return { ok: anySucceeded, alertId };
+  } catch {
+    return { ok: false, alertId };
+  }
+}
+
+export async function pollFirestoreAccessGrantRequest(
+  firebaseApp: FirebaseApp,
+  user: User,
+  email: string,
+  alertId: string
+): Promise<{ decision: string; authorized: boolean }> {
+  try {
+    const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+    const [authCheck, alertRes, reqRes] = await Promise.allSettled([
+      checkFirestoreAdminAuthorization(firebaseApp, user, email, 2000),
+      alertId ? getDoc(doc(sharedDb, 'loginAlerts', alertId)) : Promise.resolve(null),
+      alertId ? getDoc(doc(sharedDb, 'adminAccessRequests', alertId)) : Promise.resolve(null),
+    ]);
+
+    if (authCheck.status === 'fulfilled' && authCheck.value.authorized) {
+      return { decision: 'approved', authorized: true };
+    }
+
+    for (const res of [alertRes, reqRes]) {
+      if (res.status === 'fulfilled' && res.value && res.value.exists()) {
+        const d = res.value.data() as Record<string, unknown>;
+        const dec = String(d.decision ?? d.status ?? 'pending').toLowerCase();
+        if (dec === 'approved' || dec === 'granted') {
+          return { decision: 'approved', authorized: true };
+        }
+        if (dec === 'denied' || dec === 'rejected') {
+          return { decision: 'denied', authorized: false };
+        }
+      }
+    }
+    return { decision: 'pending', authorized: false };
+  } catch {
+    return { decision: 'pending', authorized: false };
+  }
+}
+
+export async function createFirestorePendingVerificationAlert(
+  firebaseApp: FirebaseApp,
+  user: User,
+  payload: {
+    sessionId: string;
+    deviceName: string;
+    platform: string;
+    location: string;
+  }
+): Promise<{ ok: boolean; alertId: string; code: string }> {
+  const now = Date.now();
+  const alertId = generateAlertId(now);
+  const bytes = new Uint32Array(1);
+  crypto.getRandomValues(bytes);
+  const code = String(bytes[0] % 1_000_000).padStart(6, '0');
+  const email = (user.email || '').trim().toLowerCase().slice(0, 254);
+
+  try {
+    const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+    await setDoc(doc(sharedDb, 'loginAlerts', alertId), {
+      id: alertId,
+      sessionId: payload.sessionId,
+      uid: user.uid.slice(0, 128),
+      email,
+      deviceName: payload.deviceName.slice(0, 160),
+      platform: payload.platform.slice(0, 40),
+      location: payload.location.slice(0, 160),
+      timestampMillis: now,
+      decision: 'pending',
+      status: 'pending',
+      alertType: 'new_device',
+      verificationCode: code,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return { ok: true, alertId, code };
+  } catch {
+    return { ok: false, alertId, code };
+  }
+}
+
+export async function pollFirestoreVerificationAlert(
+  firebaseApp: FirebaseApp,
+  alertId: string
+): Promise<{ status: string }> {
+  try {
+    const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+    const snap = await getDoc(doc(sharedDb, 'loginAlerts', alertId));
+    if (!snap.exists()) return { status: 'pending' };
+    const data = snap.data() as Record<string, unknown>;
+    const dec = String(data.decision ?? data.status ?? 'pending').toLowerCase();
+    if (dec === 'approved' || dec === 'granted') return { status: 'approved' };
+    if (dec === 'denied' || dec === 'rejected') return { status: 'denied' };
+    return { status: 'pending' };
+  } catch {
+    return { status: 'pending' };
+  }
+}
+
+/**
+ * Firestore fallback for Admin -> Security & Devices when Cloudflare Worker v2
+ * is not deployed yet, reading shared config/security, adminSessions, and loginAlerts.
+ */
+export async function readFirestoreSecurityDashboardData(
+  firebaseApp: FirebaseApp,
+  user: User | null | undefined
+): Promise<{
+  security: CloudflareSecurityStatus;
+  sessions: CloudflareAdminSession[];
+  activeCount: number;
+  alerts: CloudflareLoginAlert[];
+}> {
+  const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+  const [secRes, sessRes, alertsRes] = await Promise.allSettled([
+    getDoc(doc(sharedDb, 'config', 'security')),
+    getDocs(query(collection(sharedDb, 'adminSessions'), limit(50))),
+    getDocs(query(collection(sharedDb, 'loginAlerts'), limit(50))),
+  ]);
+
+  const secData =
+    secRes.status === 'fulfilled' && secRes.value.exists()
+      ? (secRes.value.data() as Record<string, unknown>)
+      : {};
+  const extracted2fa = extractAppTwoFactorConfig(secData, user?.uid);
+  const forceSignOutBeforeMs =
+    extractFirestoreTimestampMillis(secData.forceSignOutBefore) ?? 0;
+
+  const sessions: CloudflareAdminSession[] =
+    sessRes.status === 'fulfilled'
+      ? sessRes.value.docs
+          .map((d) => {
+            const r = d.data() as Record<string, unknown>;
+            const status = String(r.status ?? 'active');
+            const loginAtMillis = Number(r.loginAtMillis ?? 0);
+            const lastActiveMillis = Number(r.lastActiveMillis ?? loginAtMillis);
+            const createdAtMs = extractFirestoreTimestampMillis(r.createdAt) ?? loginAtMillis;
+            const updatedAtMs = extractFirestoreTimestampMillis(r.updatedAt) ?? lastActiveMillis;
+            return {
+              id: d.id,
+              uid: String(r.uid ?? ''),
+              deviceId: String(r.deviceId ?? ''),
+              deviceName: String(r.deviceName ?? 'Admin Device'),
+              platform: String(r.platform ?? 'Unknown'),
+              email: String(r.email ?? ''),
+              location: String(r.location ?? ''),
+              loginAtMillis,
+              lastActiveMillis,
+              status: (status === 'revoked' || status === 'pending_verification'
+                ? status
+                : 'active') as CloudflareAdminSession['status'],
+              userAgent: String(r.userAgent ?? ''),
+              createdAtMs,
+              updatedAtMs,
+            };
+          })
+          .sort((a, b) => b.lastActiveMillis - a.lastActiveMillis)
+      : [];
+
+  const activeCount = sessions.filter((s) => s.status === 'active').length;
+
+  const alerts: CloudflareLoginAlert[] =
+    alertsRes.status === 'fulfilled'
+      ? alertsRes.value.docs
+          .map((d) => {
+            const r = d.data() as Record<string, unknown>;
+            const decision = String(r.decision ?? r.status ?? 'pending').toLowerCase();
+            const isUnauth =
+              String(r.alertType ?? r.type ?? '').includes('unauth') ||
+              String(r.type ?? '') === 'access_request' ||
+              d.id.startsWith('unauth_');
+            const timestampMillis = Number(r.timestampMillis ?? 0);
+            const createdAtMs = extractFirestoreTimestampMillis(r.createdAt) ?? timestampMillis;
+            const updatedAtMs = extractFirestoreTimestampMillis(r.updatedAt) ?? timestampMillis;
+            return {
+              id: d.id,
+              sessionId: String(r.sessionId ?? ''),
+              uid: String(r.uid ?? ''),
+              email: String(r.email ?? ''),
+              deviceName: String(r.deviceName ?? 'Unknown Device'),
+              platform: String(r.platform ?? 'Website'),
+              location: String(r.location ?? ''),
+              timestampMillis,
+              decision: (decision === 'approved' || decision === 'denied' || decision === 'notified'
+                ? decision
+                : 'pending') as CloudflareLoginAlert['decision'],
+              alertType: (isUnauth ? 'unauthorized_email' : 'new_device') as CloudflareLoginAlert['alertType'],
+              verificationCode:
+                typeof r.verificationCode === 'string' && r.verificationCode
+                  ? r.verificationCode
+                  : undefined,
+              createdAtMs,
+              updatedAtMs,
+            };
+          })
+          .sort((a, b) => b.timestampMillis - a.timestampMillis)
+      : [];
+
+  return {
+    security: {
+      forceSignOutBeforeMs,
+      twoFactorEnabled: extracted2fa.enabled,
+      hasTotpSecret: Boolean(extracted2fa.secret),
+      requireDeviceApproval: Boolean(secData.requireDeviceApproval),
+      loginAlertsEnabled: secData.loginAlertsEnabled !== false,
+      trustedDeviceCount: 0,
+    },
+    sessions,
+    activeCount,
+    alerts,
+  };
+}
+
+export async function saveFirestoreSecuritySettings(
+  firebaseApp: FirebaseApp,
+  patch: {
+    twoFactorEnabled?: boolean;
+    totpSecret?: string;
+    requireDeviceApproval?: boolean;
+    loginAlertsEnabled?: boolean;
+    forceSignOutAll?: boolean;
+  }
+): Promise<void> {
+  const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+  const updatePayload: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+  if (typeof patch.twoFactorEnabled === 'boolean') {
+    updatePayload.twoFactorEnabled = patch.twoFactorEnabled;
+    updatePayload.totpEnabled = patch.twoFactorEnabled;
+    updatePayload.authenticatorEnabled = patch.twoFactorEnabled;
+  }
+  if (typeof patch.totpSecret === 'string') {
+    updatePayload.totpSecret = patch.totpSecret;
+  }
+  if (typeof patch.requireDeviceApproval === 'boolean') {
+    updatePayload.requireDeviceApproval = patch.requireDeviceApproval;
+  }
+  if (typeof patch.loginAlertsEnabled === 'boolean') {
+    updatePayload.loginAlertsEnabled = patch.loginAlertsEnabled;
+  }
+  if (patch.forceSignOutAll) {
+    updatePayload.forceSignOutBefore = serverTimestamp();
+  }
+  await setDoc(doc(sharedDb, 'config', 'security'), updatePayload, { merge: true });
+}
+
+export async function respondToFirestoreLoginAlert(
+  firebaseApp: FirebaseApp,
+  alertId: string,
+  decision: 'approved' | 'denied',
+  alertEmail?: string,
+  alertUid?: string,
+  isUnauthorizedRequest?: boolean
+): Promise<{ ok: boolean; grantedEmail?: string | null }> {
+  const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+  await setDoc(
+    doc(sharedDb, 'loginAlerts', alertId),
+    {
+      decision,
+      status: decision,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  let grantedEmail: string | null = null;
+  if (decision === 'approved' && isUnauthorizedRequest && alertEmail) {
+    const lowerEmail = alertEmail.trim().toLowerCase();
+    grantedEmail = lowerEmail;
+    try {
+      const accessRef = doc(sharedDb, 'config', 'adminAccess');
+      const snap = await getDoc(accessRef);
+      const current = snap.exists()
+        ? extractEmailListFromDoc(snap.data() as Record<string, unknown>)
+        : [];
+      const next = Array.from(new Set(['alifcarimports@gmail.com', ...current, lowerEmail]));
+      await setDoc(
+        accessRef,
+        {
+          adminEmails: next,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      if (alertUid) {
+        await setDoc(
+          doc(sharedDb, 'admins', alertUid),
+          {
+            email: lowerEmail,
+            role: 'admin',
+            createdAt: serverTimestamp(),
+          },
+          { merge: true }
+        ).catch(() => undefined);
+      }
+    } catch {
+      // Non-fatal if rules restrict adminAccess write
+    }
+  }
+  return { ok: true, grantedEmail };
+}
+
+export async function revokeFirestoreAdminSession(
+  firebaseApp: FirebaseApp,
+  sessionId: string
+): Promise<void> {
+  const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+  await setDoc(
+    doc(sharedDb, 'adminSessions', sessionId),
+    {
+      status: 'revoked',
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 /**

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildOtpAuthUrl,
   extractAppTwoFactorConfig,
+  generateBase32Secret,
   generateTotpCode,
   normalizeTotpSecret,
   verifyTotpCode,
@@ -12,11 +14,9 @@ import {
 const RFC_TEST_SECRET_BASE32 = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 
 test('generateTotpCode matches RFC 6238 SHA-1 test vector', async () => {
-  // At t = 59s, RFC 6238 8-digit SHA-1 value is 94287082 -> 6-digit is 287082
   const codeAt59 = await generateTotpCode(RFC_TEST_SECRET_BASE32, 59_000);
   assert.equal(codeAt59, '287082');
 
-  // At t = 1111111109s, RFC 6238 8-digit SHA-1 value is 07081804 -> 6-digit is 081804
   const codeAt1111 = await generateTotpCode(RFC_TEST_SECRET_BASE32, 1_111_111_109_000);
   assert.equal(codeAt1111, '081804');
 });
@@ -36,7 +36,7 @@ test('verifyTotpCode accepts current and +/-1 30s window codes and rejects wrong
   assert.equal(await verifyTotpCode(RFC_TEST_SECRET_BASE32, '123', nowMs), false);
 });
 
-test('normalizeTotpSecret parses raw Base32 and otpauth URIs', () => {
+test('normalizeTotpSecret parses raw Base32 and otpauth URIs and rejects non-secrets', () => {
   assert.equal(normalizeTotpSecret(' gezd gnbv gy3t qojq '), 'GEZDGNBVGY3TQOJQ');
   assert.equal(
     normalizeTotpSecret(
@@ -44,9 +44,15 @@ test('normalizeTotpSecret parses raw Base32 and otpauth URIs', () => {
     ),
     'JBSWY3DPEHPK3PXP'
   );
+  assert.equal(normalizeTotpSecret('alifcarimports@gmail.com'), '');
+  assert.equal(normalizeTotpSecret('https://example.com'), '');
+
+  const generated = generateBase32Secret();
+  assert.match(generated, /^[A-Z2-7]{32}$/);
+  assert.ok(buildOtpAuthUrl(generated, 'admin@example.com').includes(`secret=${generated}`));
 });
 
-test('extractAppTwoFactorConfig detects flat and nested Firestore security schemas', async () => {
+test('extractAppTwoFactorConfig detects flat, snake_case, nested, and per-UID Firestore security schemas', async () => {
   const flat = extractAppTwoFactorConfig({
     totpEnabled: true,
     totpSecret: RFC_TEST_SECRET_BASE32,
@@ -64,6 +70,20 @@ test('extractAppTwoFactorConfig detects flat and nested Firestore security schem
   });
   assert.equal(nested.enabled, true);
   assert.equal(nested.secret, RFC_TEST_SECRET_BASE32);
+
+  const perUid = extractAppTwoFactorConfig(
+    {
+      users: {
+        uid_123: {
+          two_factor_enabled: true,
+          ga_secret_key: RFC_TEST_SECRET_BASE32,
+        },
+      },
+    },
+    'uid_123'
+  );
+  assert.equal(perUid.enabled, true);
+  assert.equal(perUid.secret, RFC_TEST_SECRET_BASE32);
 
   assert.equal(await verifyTwoFactorCodeOrBackup(flat, 'ABC-123', 59_000), true);
   assert.equal(await verifyTwoFactorCodeOrBackup(flat, '287082', 59_000), true);
