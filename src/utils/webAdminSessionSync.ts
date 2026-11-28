@@ -201,6 +201,12 @@ export function clearWebAdminSessionVerified(): void {
   try {
     if (typeof window !== 'undefined') {
       window.sessionStorage.removeItem(VERIFIED_SESSION_KEY);
+      for (let i = window.sessionStorage.length - 1; i >= 0; i -= 1) {
+        const key = window.sessionStorage.key(i);
+        if (key && key.startsWith('alif_web_alert_sent_')) {
+          window.sessionStorage.removeItem(key);
+        }
+      }
     }
   } catch {
     // Ignore
@@ -585,29 +591,35 @@ export async function createFirestoreAccessGrantRequest(
 
   try {
     const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
-    const alertDoc = {
+    const sessionId = buildWebAdminSessionId(user.uid, payload.deviceId);
+    // Exact canonical 11-key schema matching the companion mobile app's loginAlerts rules
+    const canonicalLoginAlertDoc = {
       id: alertId,
-      sessionId: `unauth_${sanitizeSessionIdPart(payload.deviceId).slice(0, 16)}`,
+      sessionId,
       uid: user.uid.slice(0, 128),
       email,
-      deviceId: payload.deviceId.slice(0, 128),
-      deviceName: payload.deviceName.slice(0, 160),
+      deviceName: `${payload.deviceName} (Access Request)`.slice(0, 160),
       platform: payload.platform.slice(0, 40),
       location: payload.location.slice(0, 160),
       timestampMillis: now,
       decision: 'pending',
-      status: 'pending',
-      alertType: 'unauthorized_email',
-      type: 'access_request',
-      requestAccess: true,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
 
+    const extendedRequestDoc = {
+      ...canonicalLoginAlertDoc,
+      deviceId: payload.deviceId.slice(0, 128),
+      status: 'pending',
+      alertType: 'unauthorized_email',
+      type: 'access_request',
+      requestAccess: true,
+    };
+
     const writes = await Promise.allSettled([
-      setDoc(doc(sharedDb, 'loginAlerts', alertId), alertDoc),
-      setDoc(doc(sharedDb, 'adminAccessRequests', alertId), alertDoc),
-      setDoc(doc(sharedDb, 'accessRequests', alertId), alertDoc),
+      setDoc(doc(sharedDb, 'loginAlerts', alertId), canonicalLoginAlertDoc),
+      setDoc(doc(sharedDb, 'adminAccessRequests', alertId), extendedRequestDoc),
+      setDoc(doc(sharedDb, 'accessRequests', alertId), extendedRequestDoc),
     ]);
 
     const anySucceeded = writes.some((w) => w.status === 'fulfilled');
@@ -670,24 +682,31 @@ export async function createFirestorePendingVerificationAlert(
   const code = String(bytes[0] % 1_000_000).padStart(6, '0');
   const email = (user.email || '').trim().toLowerCase().slice(0, 254);
 
+  const canonicalDoc = {
+    id: alertId,
+    sessionId: payload.sessionId,
+    uid: user.uid.slice(0, 128),
+    email,
+    deviceName: `${payload.deviceName} (Code: ${code})`.slice(0, 160),
+    platform: payload.platform.slice(0, 40),
+    location: payload.location.slice(0, 160),
+    timestampMillis: now,
+    decision: 'pending',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
   try {
     const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
-    await setDoc(doc(sharedDb, 'loginAlerts', alertId), {
-      id: alertId,
-      sessionId: payload.sessionId,
-      uid: user.uid.slice(0, 128),
-      email,
-      deviceName: payload.deviceName.slice(0, 160),
-      platform: payload.platform.slice(0, 40),
-      location: payload.location.slice(0, 160),
-      timestampMillis: now,
-      decision: 'pending',
-      status: 'pending',
-      alertType: 'new_device',
-      verificationCode: code,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    try {
+      await setDoc(doc(sharedDb, 'loginAlerts', alertId), {
+        ...canonicalDoc,
+        verificationCode: code,
+      });
+    } catch {
+      // Fallback to strict 11-key schema if Firestore rules enforce keys().hasOnly(...)
+      await setDoc(doc(sharedDb, 'loginAlerts', alertId), canonicalDoc);
+    }
     return { ok: true, alertId, code };
   } catch {
     return { ok: false, alertId, code };
@@ -1030,47 +1049,51 @@ export async function startWebAdminSession(
       try {
         const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
         const sessionRef = doc(sharedDb, 'adminSessions', sessionId);
-        const existingSnap = await getDoc(sessionRef);
         if (activeGen === watchGeneration) {
-          if (!existingSnap.exists()) {
-            await setDoc(sessionRef, {
-              id: sessionId,
-              uid: user.uid.slice(0, 128),
-              deviceId,
-              deviceName,
-              platform: 'Website',
-              email,
-              location,
-              loginAtMillis: now,
-              lastActiveMillis: now,
-              status: 'active',
-              userAgent,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          } else {
-            await updateDoc(sessionRef, {
-              deviceName,
-              platform: 'Website',
-              email,
-              location,
-              loginAtMillis: now,
-              lastActiveMillis: now,
-              status: 'active',
-              userAgent,
-              updatedAt: serverTimestamp(),
-            });
-          }
+          // Run session write and mobile-app login alert write independently so neither blocks the other
+          const sessionWritePromise = (async () => {
+            const existingSnap = await getDoc(sessionRef);
+            if (activeGen !== watchGeneration) return;
+            if (!existingSnap.exists()) {
+              await setDoc(sessionRef, {
+                id: sessionId,
+                uid: user.uid.slice(0, 128),
+                deviceId,
+                deviceName,
+                platform: 'Website',
+                email,
+                location,
+                loginAtMillis: now,
+                lastActiveMillis: now,
+                status: 'active',
+                userAgent,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+            } else {
+              await updateDoc(sessionRef, {
+                deviceName,
+                platform: 'Website',
+                email,
+                location,
+                loginAtMillis: now,
+                lastActiveMillis: now,
+                status: 'active',
+                userAgent,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          })();
 
-          const alertFlagKey = `alif_web_alert_sent_${user.uid}_${user.metadata?.lastSignInTime || ''}`;
-          let alertAlreadySent = false;
-          try {
-            alertAlreadySent = Boolean(window.sessionStorage.getItem(alertFlagKey));
-          } catch {
-            alertAlreadySent = false;
-          }
-
-          if (!alertAlreadySent) {
+          const alertWritePromise = (async () => {
+            const alertFlagKey = `alif_web_alert_sent_${user.uid}_${user.metadata?.lastSignInTime || ''}`;
+            let alertAlreadySent = false;
+            try {
+              alertAlreadySent = Boolean(window.sessionStorage.getItem(alertFlagKey));
+            } catch {
+              alertAlreadySent = false;
+            }
+            if (alertAlreadySent || activeGen !== watchGeneration) return;
             const alertId = generateAlertId(now);
             await setDoc(doc(sharedDb, 'loginAlerts', alertId), {
               id: alertId,
@@ -1090,7 +1113,9 @@ export async function startWebAdminSession(
             } catch {
               // Ignore sessionStorage restrictions
             }
-          }
+          })();
+
+          await Promise.allSettled([sessionWritePromise, alertWritePromise]);
 
           unsubscribeSessionWatch = onSnapshot(
             sessionRef,

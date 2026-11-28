@@ -1,23 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Bell,
   Check,
   Copy,
   Eye,
   KeyRound,
   Laptop,
-  Loader2,
   LogOut,
   Mail,
   MessageSquare,
   MonitorSmartphone,
   RefreshCw,
-  ShieldAlert,
   ShieldCheck,
   Smartphone,
   TrendingUp,
   Users,
-  X,
 } from 'lucide-react';
 import { app, auth } from '../firebase';
 import type { CustomerInquiry } from '../types/showroom';
@@ -28,12 +24,10 @@ import {
   fetchCloudflareSecurityStatus,
   fetchCloudflareVisitorAnalytics,
   forceSignOutAllCloudflareDevices,
-  respondToCloudflareLoginAlert,
   revokeCloudflareAdminSession,
   setupCloudflareTotp,
   updateCloudflareSecuritySettings,
   type CloudflareAdminSession,
-  type CloudflareLoginAlert,
   type CloudflareSecurityStatus,
   type CloudflareVisitorAnalytics,
 } from '../utils/cloudflareStore';
@@ -47,7 +41,6 @@ import {
 import {
   getOrCreateWebDeviceId,
   readFirestoreSecurityDashboardData,
-  respondToFirestoreLoginAlert,
   revokeFirestoreAdminSession,
   saveFirestoreSecuritySettings,
 } from '../utils/webAdminSessionSync';
@@ -61,96 +54,9 @@ function formatRelativeTime(ms: number): string {
   return new Date(ms).toLocaleDateString();
 }
 
-export function PendingLoginAlertsBanner({
-  alerts,
-  onDecide,
-  busyId,
-}: {
-  alerts: CloudflareLoginAlert[];
-  onDecide: (alertId: string, decision: 'approved' | 'denied') => Promise<void>;
-  busyId: string | null;
-}) {
-  const pending = alerts.filter((a) => a.decision === 'pending');
-  if (pending.length === 0) return null;
-
-  return (
-    <div className="space-y-2.5" role="alert" aria-live="polite">
-      {pending.map((alert) => {
-        const isUnauth = alert.alertType === 'unauthorized_email';
-        const busy = busyId === alert.id;
-        return (
-          <div
-            key={alert.id}
-            className="rounded-xl border border-amber-500/40 bg-amber-950/35 px-4 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3"
-          >
-            <div className="flex items-start gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 flex items-center justify-center shrink-0 mt-0.5">
-                <ShieldAlert className="w-4 h-4" />
-              </div>
-              <div className="min-w-0 space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-semibold text-amber-100">
-                    {isUnauth
-                      ? 'Admin Access Grant Request'
-                      : 'New Device Sign-In Alert'}
-                  </p>
-                  <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30">
-                    {alert.platform}
-                  </span>
-                  <span className="text-[11px] text-amber-200/70">
-                    {formatRelativeTime(alert.timestampMillis)}
-                  </span>
-                </div>
-                <p className="text-xs text-zinc-200">
-                  <span className="font-semibold text-white">{alert.email}</span> tried to sign in from{' '}
-                  <span className="font-medium text-white">{alert.deviceName}</span>
-                  {alert.location ? ` (${alert.location})` : ''}.
-                </p>
-                {alert.verificationCode && (
-                  <p className="text-xs text-amber-200 flex items-center gap-2 pt-0.5">
-                    <span>Verification code for this login:</span>
-                    <span className="font-mono text-sm font-bold tracking-[0.2em] px-2 py-0.5 rounded bg-black/50 border border-amber-400/40 text-white">
-                      {alert.verificationCode}
-                    </span>
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void onDecide(alert.id, 'approved')}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-semibold transition-colors cursor-pointer"
-              >
-                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                <span>{isUnauth ? 'Grant Access' : 'Approve Login'}</span>
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void onDecide(alert.id, 'denied')}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-red-950/70 hover:bg-red-900 border border-red-800/70 disabled:opacity-60 text-red-200 text-xs font-semibold transition-colors cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-                <span>Deny</span>
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 export function AdminSecurityTab({
-  alerts,
-  onAlertsUpdated,
   onForceSignOutSelf,
 }: {
-  alerts: CloudflareLoginAlert[];
-  onAlertsUpdated: () => Promise<void>;
   onForceSignOutSelf: () => void;
 }) {
   const [security, setSecurity] = useState<CloudflareSecurityStatus | null>(null);
@@ -172,10 +78,6 @@ export function AdminSecurityTab({
   const [copiedSecret, setCopiedSecret] = useState(false);
 
   const currentDeviceId = getOrCreateWebDeviceId();
-  const notifSupported = typeof window !== 'undefined' && 'Notification' in window;
-  const [notifPermission, setNotifPermission] = useState<string>(
-    notifSupported ? Notification.permission : 'unsupported'
-  );
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -206,12 +108,10 @@ export function AdminSecurityTab({
         });
         setSessions(mergedSessions);
         setActiveCount(mergedSessions.filter((s) => s.status === 'active').length);
-        await onAlertsUpdated();
       } else if (fsRes.status === 'fulfilled') {
         setSecurity(fsRes.value.security);
         setSessions(fsRes.value.sessions);
         setActiveCount(fsRes.value.activeCount);
-        await onAlertsUpdated();
       } else {
         throw new Error('Unable to load security settings right now.');
       }
@@ -220,7 +120,7 @@ export function AdminSecurityTab({
     } finally {
       setLoading(false);
     }
-  }, [onAlertsUpdated]);
+  }, []);
 
   useEffect(() => {
     void loadData();
@@ -372,44 +272,6 @@ export function AdminSecurityTab({
     }
   };
 
-  const handleAlertDecision = async (alertId: string, decision: 'approved' | 'denied') => {
-    setBusyAction(`alert-${alertId}`);
-    setError(null);
-    const target = alerts.find((a) => a.id === alertId);
-    try {
-      const [cfRes, fsRes] = await Promise.allSettled([
-        respondToCloudflareLoginAlert(alertId, decision),
-        respondToFirestoreLoginAlert(
-          app,
-          alertId,
-          decision,
-          target?.email,
-          target?.uid,
-          target?.alertType === 'unauthorized_email'
-        ),
-      ]);
-      if (cfRes.status === 'rejected' && fsRes.status === 'rejected') {
-        throw new Error('Unable to respond to alert.');
-      }
-      setNotice(decision === 'approved' ? 'Approved login / granted access.' : 'Denied login attempt.');
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to respond to alert.');
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const handleRequestBrowserNotifications = async () => {
-    if (!notifSupported) return;
-    try {
-      const perm = await Notification.requestPermission();
-      setNotifPermission(perm);
-    } catch {
-      // Ignore
-    }
-  };
-
   const activeSessions = sessions.filter((s) => s.status === 'active');
 
   return (
@@ -417,10 +279,10 @@ export function AdminSecurityTab({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-bold text-white">
-            Security, Active Devices & Login Alerts
+            Security &amp; Active Devices
           </h2>
           <p className="text-xs text-zinc-400">
-            Manage 2-step authentication codes, approve new devices or emails, and monitor signed-in devices.
+            Manage 2-step authentication codes and active devices. All login alerts and access requests are sent directly to your mobile app.
           </p>
         </div>
         <button
@@ -446,14 +308,14 @@ export function AdminSecurityTab({
       )}
 
       {/* Security Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="bg-[#111115] border border-white/[0.08] rounded-xl p-4 space-y-1">
           <div className="flex items-center justify-between text-xs text-zinc-400">
             <span>Active Devices</span>
             <MonitorSmartphone className="w-4 h-4 text-sky-400" />
           </div>
           <p className="text-2xl font-bold text-white tabular-nums">{activeCount}</p>
-          <p className="text-[11px] text-zinc-500">Signed-in Website & Mobile sessions</p>
+          <p className="text-[11px] text-zinc-500">Signed-in Website &amp; Mobile sessions</p>
         </div>
 
         <div className="bg-[#111115] border border-white/[0.08] rounded-xl p-4 space-y-1">
@@ -469,17 +331,6 @@ export function AdminSecurityTab({
               ? '6-digit code required on admin logins'
               : 'Turn on to require a 6-digit code'}
           </p>
-        </div>
-
-        <div className="bg-[#111115] border border-white/[0.08] rounded-xl p-4 space-y-1">
-          <div className="flex items-center justify-between text-xs text-zinc-400">
-            <span>Pending Alerts</span>
-            <Bell className="w-4 h-4 text-amber-400" />
-          </div>
-          <p className="text-2xl font-bold text-white tabular-nums">
-            {alerts.filter((a) => a.decision === 'pending').length}
-          </p>
-          <p className="text-[11px] text-zinc-500">Waiting for your Approve or Deny</p>
         </div>
       </div>
 
@@ -600,10 +451,10 @@ export function AdminSecurityTab({
           <label className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-[#0b0b0e] border border-white/[0.06] cursor-pointer">
             <div className="space-y-0.5">
               <span className="text-xs font-semibold text-white block">
-                New-Device Approval & Alert
+                New-Device Approval &amp; Mobile Alert
               </span>
               <span className="text-[11px] text-zinc-400 block">
-                Notify active devices and require approval or 6-digit code whenever another device signs in.
+                Send a notification to your mobile app and require approval or a 6-digit code whenever another device signs in.
               </span>
             </div>
             <input
@@ -618,23 +469,13 @@ export function AdminSecurityTab({
           <div className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-[#0b0b0e] border border-white/[0.06]">
             <div className="space-y-0.5">
               <span className="text-xs font-semibold text-white block">
-                Browser Alert Notifications
+                Mobile App Alert Routing
               </span>
               <span className="text-[11px] text-zinc-400 block">
-                {notifPermission === 'granted'
-                  ? 'Browser notifications are active for login & access requests.'
-                  : 'Enable browser alerts when another email or device tries to log in.'}
+                All login alerts and access-grant requests from this website are delivered directly to your Alif Car Import mobile app (no alerts are shown on the website).
               </span>
             </div>
-            {notifSupported && notifPermission !== 'granted' && (
-              <button
-                type="button"
-                onClick={() => void handleRequestBrowserNotifications()}
-                className="px-3 py-1.5 rounded-lg border border-zinc-700 hover:border-white text-xs font-medium text-white shrink-0 cursor-pointer"
-              >
-                Enable
-              </button>
-            )}
+            <Smartphone className="w-4 h-4 text-emerald-400 shrink-0 mt-1" aria-hidden="true" />
           </div>
         </div>
       </div>
@@ -713,75 +554,6 @@ export function AdminSecurityTab({
                 </div>
               );
             })}
-          </div>
-        )}
-      </div>
-
-      {/* Login Alerts History */}
-      <div className="bg-[#111115] border border-white/[0.08] rounded-xl p-5 space-y-4">
-        <div>
-          <h3 className="text-sm font-semibold text-white">Recent Login Alerts & Access Requests</h3>
-          <p className="text-xs text-zinc-400">
-            Every sign-in from another device or unauthorized email is logged here.
-          </p>
-        </div>
-
-        {alerts.length === 0 ? (
-          <p className="text-xs text-zinc-500 py-4 text-center">No login alerts recorded yet.</p>
-        ) : (
-          <div className="divide-y divide-white/[0.06]">
-            {alerts.slice(0, 20).map((a) => (
-              <div
-                key={a.id}
-                className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
-              >
-                <div className="space-y-0.5 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-semibold text-white">{a.email}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
-                      {a.alertType === 'unauthorized_email' ? 'Access Request' : a.platform}
-                    </span>
-                    <span
-                      className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded ${
-                        a.decision === 'pending'
-                          ? 'bg-amber-950 text-amber-300 border border-amber-700/50'
-                          : a.decision === 'approved' || a.decision === 'notified'
-                          ? 'bg-emerald-950 text-emerald-300'
-                          : 'bg-red-950 text-red-300'
-                      }`}
-                    >
-                      {a.decision}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-zinc-400">
-                    {a.deviceName}
-                    {a.location ? ` · ${a.location}` : ''} · {formatRelativeTime(a.timestampMillis)}
-                    {a.verificationCode ? ` · Code: ${a.verificationCode}` : ''}
-                  </p>
-                </div>
-
-                {a.decision === 'pending' && (
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      disabled={busyAction === `alert-${a.id}`}
-                      onClick={() => void handleAlertDecision(a.id, 'approved')}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer"
-                    >
-                      {a.alertType === 'unauthorized_email' ? 'Grant' : 'Approve'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyAction === `alert-${a.id}`}
-                      onClick={() => void handleAlertDecision(a.id, 'denied')}
-                      className="px-3 py-1.5 rounded-lg border border-red-800 text-red-300 hover:bg-red-950/60 text-xs font-semibold cursor-pointer"
-                    >
-                      Deny
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
           </div>
         )}
       </div>

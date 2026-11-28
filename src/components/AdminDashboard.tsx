@@ -51,22 +51,10 @@ import {
   shouldAutoFetchTikTokCover,
 } from '../utils/inventory';
 import { didTikTokPostChange } from '../utils/firestoreSyncLogic';
-import { app, auth } from '../firebase';
-import {
-  fetchCloudflareLoginAlerts,
-  isCloudflareBackendEnabled,
-  respondToCloudflareLoginAlert,
-  type CloudflareLoginAlert,
-} from '../utils/cloudflareStore';
 import { fetchTikTokVideoMetadata } from '../utils/storeClient';
-import {
-  readFirestoreSecurityDashboardData,
-  respondToFirestoreLoginAlert,
-} from '../utils/webAdminSessionSync';
 import {
   AdminSecurityTab,
   AdminVisitorsTab,
-  PendingLoginAlertsBanner,
 } from './AdminSecurityPanel';
 import { SocialMediaIconRow } from './SocialIcons';
 import { VehicleFormModal } from './VehicleFormModal';
@@ -140,149 +128,6 @@ export function AdminDashboard({
   } | null>(null);
   const [importingMobileApp, setImportingMobileApp] = useState(false);
   const [importProgress, setImportProgress] = useState('');
-  const [loginAlerts, setLoginAlerts] = useState<CloudflareLoginAlert[]>([]);
-  const [busyAlertId, setBusyAlertId] = useState<string | null>(null);
-  const seenPendingAlertsRef = useRef<Set<string>>(new Set());
-  const alertsInitializedRef = useRef(false);
-
-  const refreshLoginAlerts = useCallback(async () => {
-    try {
-      let alerts: CloudflareLoginAlert[] = [];
-      let loaded = false;
-
-      if (isCloudflareBackendEnabled()) {
-        try {
-          const cf = await fetchCloudflareLoginAlerts();
-          alerts = cf.alerts;
-          loaded = true;
-        } catch {
-          // Fall back to shared Firestore loginAlerts when Cloudflare Worker v2 isn't deployed
-        }
-      }
-
-      if (auth.currentUser) {
-        try {
-          const fsData = await readFirestoreSecurityDashboardData(app, auth.currentUser);
-          if (!loaded) {
-            alerts = fsData.alerts;
-            loaded = true;
-          } else if (fsData.alerts.length > 0) {
-            const byId = new Map<string, CloudflareLoginAlert>();
-            for (const a of alerts) byId.set(a.id, a);
-            for (const a of fsData.alerts) {
-              if (!byId.has(a.id)) byId.set(a.id, a);
-            }
-            alerts = Array.from(byId.values()).sort(
-              (a, b) => b.timestampMillis - a.timestampMillis
-            );
-          }
-        } catch {
-          // Ignore Firestore fallback failure
-        }
-      }
-
-      if (!loaded) return;
-      setLoginAlerts(alerts);
-
-      const pending = alerts.filter((a) => a.decision === 'pending');
-      if (alertsInitializedRef.current) {
-        for (const alert of pending) {
-          if (!seenPendingAlertsRef.current.has(alert.id)) {
-            seenPendingAlertsRef.current.add(alert.id);
-            if (
-              typeof window !== 'undefined' &&
-              'Notification' in window &&
-              Notification.permission === 'granted'
-            ) {
-              try {
-                const title =
-                  alert.alertType === 'unauthorized_email'
-                    ? 'Admin Access Request'
-                    : 'New Device Admin Login';
-                const body = `${alert.email} on ${alert.deviceName}${
-                  alert.verificationCode ? ` · Code: ${alert.verificationCode}` : ''
-                }`;
-                new Notification(title, { body });
-              } catch {
-                // Ignore Notification errors on unsupported browsers
-              }
-            }
-          }
-        }
-      } else {
-        alertsInitializedRef.current = true;
-        for (const alert of pending) {
-          seenPendingAlertsRef.current.add(alert.id);
-        }
-      }
-    } catch {
-      // Non-fatal
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshLoginAlerts();
-    const timer = window.setInterval(() => {
-      void refreshLoginAlerts();
-    }, 10_000);
-    return () => window.clearInterval(timer);
-  }, [refreshLoginAlerts]);
-
-  const handleAlertDecision = async (alertId: string, decision: 'approved' | 'denied') => {
-    setBusyAlertId(alertId);
-    const targetAlert = loginAlerts.find((a) => a.id === alertId);
-    try {
-      let grantedEmail: string | null | undefined = null;
-      let cfOk = false;
-
-      if (isCloudflareBackendEnabled()) {
-        try {
-          const res = await respondToCloudflareLoginAlert(alertId, decision);
-          grantedEmail = res.grantedEmail;
-          cfOk = true;
-        } catch {
-          // Fall back to Firestore below
-        }
-      }
-
-      const fsRes = await respondToFirestoreLoginAlert(
-        app,
-        alertId,
-        decision,
-        targetAlert?.email,
-        targetAlert?.uid,
-        targetAlert?.alertType === 'unauthorized_email'
-      ).catch(() => ({ ok: false, grantedEmail: null }));
-
-      if (!cfOk && !fsRes.ok) {
-        throw new Error('Unable to save login decision right now.');
-      }
-
-      const finalGranted = grantedEmail || fsRes.grantedEmail;
-      await refreshLoginAlerts();
-      setUploadNotice({
-        type: 'success',
-        message:
-          decision === 'approved'
-            ? finalGranted
-              ? `Granted admin access to ${finalGranted}.`
-              : 'Login request approved.'
-            : 'Login request denied and session blocked.',
-      });
-    } catch (err) {
-      setUploadNotice({
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Unable to respond to login alert.',
-      });
-    } finally {
-      setBusyAlertId(null);
-    }
-  };
-
-  const pendingAlertCount = useMemo(
-    () => loginAlerts.filter((a) => a.decision === 'pending').length,
-    [loginAlerts]
-  );
 
   const handleImportFromMobileApp = async () => {
     if (!onImportFromFirebase || importingMobileApp) return;
@@ -976,13 +821,7 @@ export function AdminDashboard({
     { id: 'inventory', label: 'Inventory Manager', icon: Car, count: store.vehicles.length },
     { id: 'tiktok', label: 'TikTok Video Links', icon: Film, count: store.tiktok.posts.length },
     { id: 'contact', label: 'Location & Contact', icon: MapPin },
-    {
-      id: 'security',
-      label: 'Security & Devices',
-      icon: Shield,
-      count: pendingAlertCount > 0 ? pendingAlertCount : undefined,
-      highlightBadge: pendingAlertCount > 0,
-    },
+    { id: 'security', label: 'Security & Devices', icon: Shield },
     { id: 'visitors', label: 'Visitors & Interactions', icon: BarChart3 },
   ];
 
@@ -1296,12 +1135,6 @@ export function AdminDashboard({
               </div>
             </div>
           )}
-
-          <PendingLoginAlertsBanner
-            alerts={loginAlerts}
-            onDecide={handleAlertDecision}
-            busyId={busyAlertId}
-          />
 
           {/* Single-Elevation Summary KPI Strip */}
           {(activeTab === 'inventory' || activeTab === 'tiktok' || activeTab === 'contact') && (
@@ -2993,13 +2826,9 @@ export function AdminDashboard({
           </section>
         )}
 
-          {/* TAB 4: SECURITY, 2FA, ACTIVE DEVICES & LOGIN ALERTS */}
+          {/* TAB 4: SECURITY, 2FA & ACTIVE DEVICES */}
           {activeTab === 'security' && (
-            <AdminSecurityTab
-              alerts={loginAlerts}
-              onAlertsUpdated={refreshLoginAlerts}
-              onForceSignOutSelf={() => onSignOut?.()}
-            />
+            <AdminSecurityTab onForceSignOutSelf={() => onSignOut?.()} />
           )}
 
           {/* TAB 5: VISITORS & INTERACTIONS */}

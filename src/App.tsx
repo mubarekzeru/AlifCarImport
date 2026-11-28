@@ -544,10 +544,9 @@ function AdminLoginView({
                   <span>Waiting for Primary Admin Approval</span>
                 </div>
                 <p className="text-xs text-zinc-200 leading-relaxed">
-                  An access grant notification has been sent to the primary admin for{' '}
+                  An access grant alert has been sent to the primary admin&apos;s Mobile App for{' '}
                   <span className="font-semibold text-white">{pendingStep.email}</span>. Once
-                  granted from the Admin Console or Mobile App, this page will continue
-                  automatically.
+                  granted in the Mobile App, this page will continue automatically.
                 </p>
                 <div className="flex items-center gap-2 text-xs text-amber-300 pt-1">
                   <Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" />
