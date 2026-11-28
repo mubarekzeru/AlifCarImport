@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, ExternalLink, Film, Loader2, Play, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, Film, Loader2, Play } from 'lucide-react';
 import type { TikTokSectionConfig } from '../types/showroom';
 import { getTikTokGridLayoutMetrics } from '../utils/firestoreSyncLogic';
 import {
   buildSocialMediaUrl,
   deriveTitleFromVideoDescription,
-  extractTikTokVideoId,
   filterActiveTikTokPosts,
   isPlaceholderTikTokCover,
   normalizeTikTokUrl,
@@ -20,13 +19,12 @@ interface TikTokShowcaseProps {
 
 interface ResolvedPostMedia {
   coverUrl?: string;
-  videoId?: string | null;
+  resolvedUrl?: string;
   title?: string;
   loading?: boolean;
 }
 
 export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps) {
-  const [activeEmbedId, setActiveEmbedId] = useState<string | null>(null);
   const [resolvedByPostId, setResolvedByPostId] = useState<Record<string, ResolvedPostMedia>>({});
   const [brokenCoverIds, setBrokenCoverIds] = useState<Record<string, boolean>>({});
   const attemptedFetchRef = useRef<Record<string, string>>({});
@@ -77,8 +75,7 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
 
       const needsCover =
         isPlaceholderTikTokCover(post.coverImageUrl) || Boolean(brokenCoverIds[post.id]);
-      const needsVideoId = !extractTikTokVideoId(normalizedUrl);
-      if (!needsCover && !needsVideoId) continue;
+      if (!needsCover) continue;
 
       const attemptKey = `${normalizedUrl}|${brokenCoverIds[post.id] ? 'retry' : 'init'}`;
       if (attemptedFetchRef.current[post.id] === attemptKey) continue;
@@ -96,7 +93,7 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
             ...prev,
             [post.id]: {
               coverUrl: meta.coverImageUrl || meta.coverOptions[0]?.url || prev[post.id]?.coverUrl,
-              videoId: meta.videoId || extractTikTokVideoId(meta.resolvedUrl) || null,
+              resolvedUrl: meta.resolvedUrl || prev[post.id]?.resolvedUrl,
               title: meta.suggestedTitle || undefined,
               loading: false,
             },
@@ -233,9 +230,12 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
             >
               {activePosts.map((post) => {
                 const resolved = resolvedByPostId[post.id];
-                const targetUrl = normalizeTikTokUrl(post.tiktokUrl) || tiktok.profileUrl;
-                const videoId = extractTikTokVideoId(targetUrl) || resolved?.videoId || null;
-                const isPlayingInline = Boolean(videoId && activeEmbedId === post.id);
+                const targetUrl =
+                  resolved?.resolvedUrl ||
+                  normalizeTikTokUrl(post.tiktokUrl) ||
+                  buildSocialMediaUrl('tiktok', tiktok.profileUrl) ||
+                  buildSocialMediaUrl('tiktok', tiktok.handle) ||
+                  undefined;
                 const coverSrc =
                   (!brokenCoverIds[post.id] && !isPlaceholderTikTokCover(post.coverImageUrl)
                     ? post.coverImageUrl
@@ -313,43 +313,15 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
                       data-testid={`tiktok-media-${post.id}`}
                       className="relative aspect-[9/15] lg:aspect-[9/13.5] w-full bg-zinc-950 overflow-hidden"
                     >
-                      {isPlayingInline && videoId ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => setActiveEmbedId(null)}
-                            aria-label={`Close embedded video for ${displayTitle}`}
-                            className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/80 text-white inline-flex items-center justify-center hover:bg-black cursor-pointer"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                          <iframe
-                            src={`https://www.tiktok.com/embed/v2/${videoId}`}
-                            title={displayTitle}
-                            className="w-full h-full bg-black"
-                            allowFullScreen
-                          />
-                        </>
-                      ) : videoId ? (
-                        <button
-                          type="button"
-                          onClick={() => setActiveEmbedId(post.id)}
-                          aria-label={`Play ${displayTitle}`}
-                          className="relative block w-full h-full text-left cursor-pointer"
-                        >
-                          {cardOverlayContent}
-                        </button>
-                      ) : (
-                        <a
-                          href={targetUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`Watch ${displayTitle} on TikTok`}
-                          className="relative block w-full h-full text-left"
-                        >
-                          {cardOverlayContent}
-                        </a>
-                      )}
+                      <a
+                        href={targetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`Watch ${displayTitle} on TikTok`}
+                        className="relative block w-full h-full text-left"
+                      >
+                        {cardOverlayContent}
+                      </a>
                     </div>
                   </article>
                 );

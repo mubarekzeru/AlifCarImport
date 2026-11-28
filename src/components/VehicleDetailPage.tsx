@@ -21,6 +21,7 @@ import {
   getSimilarVehicles,
   getVehicleGalleryImages,
   getVehiclePricingBreakdown,
+  normalizeTikTokUrl,
   resolvePublicAssetUrl,
 } from '../utils/inventory';
 import { ScrollReveal } from './ScrollReveal';
@@ -511,9 +512,9 @@ export function VehicleDetailPage({
                   );
                 })()}
 
-                {vehicle.tiktokUrl && (
+                {normalizeTikTokUrl(vehicle.tiktokUrl) && (
                   <a
-                    href={vehicle.tiktokUrl}
+                    href={normalizeTikTokUrl(vehicle.tiktokUrl)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="w-full h-10 inline-flex items-center justify-center gap-2 px-4 border border-zinc-800 bg-[#18181d] hover:border-zinc-600 text-xs font-medium text-zinc-200 hover:text-white rounded-lg transition-colors"
