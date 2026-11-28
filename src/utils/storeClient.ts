@@ -1,8 +1,14 @@
 import {
+  getMultiFactorResolver,
   sendEmailVerification,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  TotpMultiFactorGenerator,
+  type MultiFactorError,
+  type MultiFactorInfo,
+  type MultiFactorResolver,
+  type User,
 } from 'firebase/auth';
 import { INITIAL_SHOWROOM_STORE } from '../data/seedData';
 import { app, auth, formatFirestoreUserMessage, googleProvider } from '../firebase';
@@ -14,9 +20,14 @@ import {
   fetchInquiriesFromCloudflare,
   isCloudflareBackendEnabled,
   migrateShowroomStoreToCloudflare,
+  pollCloudflareLoginChallenge,
+  pollUnauthorizedAccessRequest,
+  reportUnauthorizedLoginAttempt,
   resetCloudflareToDefaults,
+  startCloudflareAdminLogin,
   submitInquiryToCloudflare,
   syncShowroomStoreToCloudflare,
+  verifyCloudflareAuthCode,
 } from './cloudflareStore';
 import {
   checkFirestoreHasShowroom,
@@ -37,7 +48,20 @@ import {
   resolveHeroVideoUrl,
   resolvePublicAssetUrl,
 } from './inventory';
-import { endWebAdminSession } from './webAdminSessionSync';
+import {
+  verifyTwoFactorCodeOrBackup,
+  type ExtractedTwoFactorConfig,
+} from './totp';
+import {
+  buildWebAdminSessionId,
+  clearWebAdminSessionVerified,
+  detectBrowserDeviceName,
+  endWebAdminSession,
+  getFallbackLocation,
+  getOrCreateWebDeviceId,
+  markWebAdminSessionVerified,
+  readFirestoreAppTwoFactorConfig,
+} from './webAdminSessionSync';
 
 function normalizeStoreAssetPaths(store: ShowroomStore): ShowroomStore {
   const normalizedVehicles = Array.isArray(store.vehicles)
@@ -183,11 +207,335 @@ export function readCachedShowroomStore(): ShowroomStore | null {
   }
 }
 
+export type AdminSignInOutcome =
+  | { status: 'verified'; email: string; uid: string }
+  | {
+      status: 'requires_verification';
+      email: string;
+      uid: string;
+      challengeId: string;
+      alertId?: string;
+      hasTotp: boolean;
+      twoFactorEnabled: boolean;
+      requireDeviceApproval: boolean;
+      hasOtherDevices: boolean;
+    }
+  | {
+      status: 'pending_access_grant';
+      email: string;
+      uid: string;
+      alertId: string;
+      message: string;
+    };
+
+interface PendingFirebaseMfaState {
+  resolver: MultiFactorResolver;
+  hint: MultiFactorInfo;
+  email: string;
+  extraAdminEmails?: string[];
+}
+
+interface PendingFirestoreTotpState {
+  uid: string;
+  email: string;
+  config: ExtractedTwoFactorConfig;
+}
+
+let pendingFirebaseMfa: PendingFirebaseMfaState | null = null;
+let pendingFirestoreTotp: PendingFirestoreTotpState | null = null;
+
+function clearPendingAuthChallenges(): void {
+  pendingFirebaseMfa = null;
+  pendingFirestoreTotp = null;
+}
+
+function tryCaptureFirebaseMfaError(
+  err: unknown,
+  fallbackEmail: string,
+  extraAdminEmails?: string[]
+): AdminSignInOutcome | null {
+  const code = (err as { code?: string })?.code ?? '';
+  if (code !== 'auth/multi-factor-auth-required') {
+    return null;
+  }
+  const resolver = getMultiFactorResolver(auth, err as MultiFactorError);
+  const totpHint =
+    resolver.hints.find((h) => h.factorId === TotpMultiFactorGenerator.FACTOR_ID) ??
+    resolver.hints[0];
+  if (!totpHint) {
+    throw new Error(
+      'Multi-factor authentication is enabled on this account, but no authenticator factor was found.'
+    );
+  }
+  const email = fallbackEmail || 'your admin account';
+  pendingFirebaseMfa = {
+    resolver,
+    hint: totpHint,
+    email,
+    extraAdminEmails,
+  };
+  return {
+    status: 'requires_verification',
+    email,
+    uid: '',
+    challengeId: 'firebase_mfa',
+    hasTotp: true,
+    twoFactorEnabled: true,
+    requireDeviceApproval: false,
+    hasOtherDevices: false,
+  };
+}
+
+async function evaluateAuthenticatedUserLogin(
+  user: User,
+  signedEmail: string,
+  extraAdminEmails?: string[],
+  options?: { skipFirestoreTotpCheck?: boolean }
+): Promise<AdminSignInOutcome> {
+  clearWebAdminSessionVerified();
+  pendingFirestoreTotp = null;
+  const deviceId = getOrCreateWebDeviceId().slice(0, 128);
+  const deviceName = detectBrowserDeviceName();
+  const location = getFallbackLocation();
+  const userAgent = (typeof navigator !== 'undefined' ? navigator.userAgent || '' : '').slice(0, 300);
+
+  const remoteAllowlist = isCloudflareBackendEnabled()
+    ? await fetchAdminAllowlistFromCloudflare(user)
+    : await fetchAdminAllowlistFromFirestore();
+  const combinedAllowlist = [...(extraAdminEmails ?? []), ...(remoteAllowlist ?? [])];
+
+  if (!isAuthorizedAdminEmail(signedEmail, combinedAllowlist)) {
+    if (isCloudflareBackendEnabled()) {
+      try {
+        const alertRes = await reportUnauthorizedLoginAttempt(user, {
+          deviceId,
+          deviceName,
+          platform: 'Website',
+          location,
+        });
+        if (alertRes.authorized) {
+          // Was just granted remotely — continue into authorized login flow
+        } else {
+          return {
+            status: 'pending_access_grant',
+            email: signedEmail,
+            uid: user.uid,
+            alertId: alertRes.alertId,
+            message: `Access request sent to the primary admin for ${signedEmail}. Waiting for approval...`,
+          };
+        }
+      } catch {
+        await signOut(auth).catch(() => undefined);
+        throw new Error('This email is not authorized for admin access.');
+      }
+    } else {
+      await signOut(auth).catch(() => undefined);
+      throw new Error('This email is not authorized for admin access.');
+    }
+  }
+
+  let cloudflareRequiresVerification: AdminSignInOutcome | null = null;
+  if (isCloudflareBackendEnabled()) {
+    const sessionId = buildWebAdminSessionId(user.uid, deviceId);
+    try {
+      const startRes = await startCloudflareAdminLogin(user, {
+        deviceId,
+        sessionId,
+        deviceName,
+        platform: 'Website',
+        location,
+        userAgent,
+      });
+      if (startRes.status === 'requires_verification' && startRes.challengeId) {
+        cloudflareRequiresVerification = {
+          status: 'requires_verification',
+          email: signedEmail,
+          uid: user.uid,
+          challengeId: startRes.challengeId,
+          alertId: startRes.alertId,
+          hasTotp: Boolean(startRes.hasTotp),
+          twoFactorEnabled: Boolean(startRes.twoFactorEnabled),
+          requireDeviceApproval: Boolean(startRes.requireDeviceApproval),
+          hasOtherDevices: Boolean(startRes.hasOtherDevices),
+        };
+      }
+    } catch (err) {
+      const status = (err as { status?: number })?.status;
+      if (status === 401 || status === 403) {
+        await signOut(auth).catch(() => undefined);
+        throw err instanceof Error ? err : new Error('Admin login verification failed.');
+      }
+      // If the remote Worker has not been updated to v2 yet (404), continue to Firestore 2FA check
+    }
+  }
+
+  // Always check companion Android app's Firestore 2FA / Authenticator setup too
+  if (!options?.skipFirestoreTotpCheck) {
+    const appTwoFactor = await readFirestoreAppTwoFactorConfig(app, user).catch(
+      (): ExtractedTwoFactorConfig => ({ enabled: false, secret: '', backupCodes: [] })
+    );
+    if (appTwoFactor.enabled && (appTwoFactor.secret || appTwoFactor.backupCodes.length > 0)) {
+      pendingFirestoreTotp = {
+        uid: user.uid,
+        email: signedEmail,
+        config: appTwoFactor,
+      };
+      if (cloudflareRequiresVerification) {
+        return {
+          ...cloudflareRequiresVerification,
+          hasTotp: true,
+          twoFactorEnabled: true,
+        };
+      }
+      return {
+        status: 'requires_verification',
+        email: signedEmail,
+        uid: user.uid,
+        challengeId: 'firestore_totp',
+        hasTotp: true,
+        twoFactorEnabled: true,
+        requireDeviceApproval: false,
+        hasOtherDevices: false,
+      };
+    }
+  }
+
+  if (cloudflareRequiresVerification) {
+    return cloudflareRequiresVerification;
+  }
+
+  markWebAdminSessionVerified(user.uid);
+  return { status: 'verified', email: signedEmail, uid: user.uid };
+}
+
+export async function completePendingAdminLoginAfterGrant(
+  extraAdminEmails?: string[]
+): Promise<AdminSignInOutcome> {
+  const user = auth.currentUser;
+  if (!user || !user.email) {
+    throw new Error('Please sign in again.');
+  }
+  return evaluateAuthenticatedUserLogin(user, user.email.trim(), extraAdminEmails);
+}
+
+export async function verifyAdminAuthenticationCode(
+  challengeId: string,
+  code: string
+): Promise<{ email: string; uid: string }> {
+  const cleanCode = code.trim().replace(/\s+/g, '');
+  if (!cleanCode) {
+    throw new Error('Please enter your 6-digit authentication code.');
+  }
+
+  // 1. Firebase Auth Native TOTP Multi-Factor Authentication
+  if (challengeId === 'firebase_mfa' && pendingFirebaseMfa) {
+    const { resolver, hint, email: fallbackEmail, extraAdminEmails } = pendingFirebaseMfa;
+    try {
+      const assertion = TotpMultiFactorGenerator.assertionForSignIn(hint.uid, cleanCode);
+      const credential = await resolver.resolveSignIn(assertion);
+      pendingFirebaseMfa = null;
+      const user = credential.user;
+      const signedEmail = user.email?.trim() ?? fallbackEmail;
+      if (!user.emailVerified) {
+        await signOut(auth).catch(() => undefined);
+        throw new Error('Please verify your admin email address first.');
+      }
+      const remoteAllowlist = isCloudflareBackendEnabled()
+        ? await fetchAdminAllowlistFromCloudflare(user)
+        : await fetchAdminAllowlistFromFirestore();
+      const allowed = isAuthorizedAdminEmail(signedEmail, [
+        ...(extraAdminEmails ?? []),
+        ...(remoteAllowlist ?? []),
+      ]);
+      if (!allowed) {
+        await signOut(auth).catch(() => undefined);
+        throw new Error('This email is not authorized for admin access.');
+      }
+      markWebAdminSessionVerified(user.uid);
+      return { email: signedEmail, uid: user.uid };
+    } catch (err) {
+      const errCode = (err as { code?: string })?.code ?? '';
+      if (errCode === 'auth/invalid-verification-code') {
+        throw new Error('Incorrect 6-digit authentication code. Please check your Authenticator app and try again.');
+      }
+      if (errCode === 'auth/code-expired') {
+        pendingFirebaseMfa = null;
+        throw new Error('Your verification session expired. Please sign in again.');
+      }
+      throw err instanceof Error ? err : new Error('Invalid authentication code.');
+    }
+  }
+
+  const user = auth.currentUser;
+  if (!user || !user.email) {
+    throw new Error('Your sign-in session expired. Please sign in again.');
+  }
+
+  // 2. Companion Android App Firestore TOTP verification
+  if (challengeId === 'firestore_totp' && pendingFirestoreTotp) {
+    const valid = await verifyTwoFactorCodeOrBackup(pendingFirestoreTotp.config, cleanCode);
+    if (!valid) {
+      throw new Error(
+        'Incorrect 6-digit authentication code. Please check your Authenticator app and try again.'
+      );
+    }
+    pendingFirestoreTotp = null;
+    markWebAdminSessionVerified(user.uid);
+    return { email: user.email.trim(), uid: user.uid };
+  }
+
+  // 3. Cloudflare challenge verification (also accepts companion app Firestore TOTP if configured)
+  try {
+    await verifyCloudflareAuthCode(user, challengeId, cleanCode, true);
+    pendingFirestoreTotp = null;
+    markWebAdminSessionVerified(user.uid);
+    return { email: user.email.trim(), uid: user.uid };
+  } catch (cfErr) {
+    if (pendingFirestoreTotp) {
+      const validAppTotp = await verifyTwoFactorCodeOrBackup(
+        pendingFirestoreTotp.config,
+        cleanCode
+      );
+      if (validAppTotp) {
+        pendingFirestoreTotp = null;
+        markWebAdminSessionVerified(user.uid);
+        return { email: user.email.trim(), uid: user.uid };
+      }
+    }
+    throw cfErr instanceof Error ? cfErr : new Error('Invalid authentication code.');
+  }
+}
+
+export async function pollAdminLoginVerification(
+  challengeId: string
+): Promise<{ status: string }> {
+  if (challengeId === 'firebase_mfa' || challengeId === 'firestore_totp') {
+    return { status: 'pending' };
+  }
+  const user = auth.currentUser;
+  if (!user) return { status: 'expired' };
+  const res = await pollCloudflareLoginChallenge(user, challengeId);
+  if (res.status === 'approved') {
+    pendingFirestoreTotp = null;
+    markWebAdminSessionVerified(user.uid);
+  }
+  return { status: res.status };
+}
+
+export async function pollAdminAccessGrantRequest(
+  alertId: string
+): Promise<{ decision: string; authorized: boolean }> {
+  const user = auth.currentUser;
+  if (!user) return { decision: 'denied', authorized: false };
+  const res = await pollUnauthorizedAccessRequest(user, alertId);
+  return { decision: res.decision, authorized: res.authorized };
+}
+
 export async function signInAdminWithEmailPassword(
   email: string,
   password: string,
   extraAdminEmails?: string[]
-): Promise<{ authenticated: boolean; email: string }> {
+): Promise<AdminSignInOutcome> {
   const normalized = email.trim().toLowerCase();
   if (!normalized || !normalized.includes('@')) {
     throw new Error('Please enter a valid admin email address.');
@@ -198,8 +546,13 @@ export async function signInAdminWithEmailPassword(
 
   let credential;
   try {
+    clearPendingAuthChallenges();
     credential = await signInWithEmailAndPassword(auth, normalized, password);
   } catch (err) {
+    const mfaOutcome = tryCaptureFirebaseMfaError(err, normalized, extraAdminEmails);
+    if (mfaOutcome) {
+      return mfaOutcome;
+    }
     const code = (err as { code?: string })?.code ?? '';
     if (code === 'auth/operation-not-allowed') {
       throw new Error(
@@ -237,26 +590,21 @@ export async function signInAdminWithEmailPassword(
     );
   }
 
-  const remoteAllowlist = isCloudflareBackendEnabled()
-    ? await fetchAdminAllowlistFromCloudflare(user)
-    : await fetchAdminAllowlistFromFirestore();
-  const combinedAllowlist = [...(extraAdminEmails ?? []), ...(remoteAllowlist ?? [])];
-
-  if (!isAuthorizedAdminEmail(signedEmail, combinedAllowlist)) {
-    await signOut(auth).catch(() => undefined);
-    throw new Error('This email is not authorized for admin access.');
-  }
-
-  return { authenticated: true, email: signedEmail };
+  return evaluateAuthenticatedUserLogin(user, signedEmail, extraAdminEmails);
 }
 
 export async function signInAdminWithGoogle(
   extraAdminEmails?: string[]
-): Promise<{ authenticated: boolean; email: string }> {
+): Promise<AdminSignInOutcome> {
   let credential;
   try {
+    clearPendingAuthChallenges();
     credential = await signInWithPopup(auth, googleProvider);
   } catch (err) {
+    const mfaOutcome = tryCaptureFirebaseMfaError(err, '', extraAdminEmails);
+    if (mfaOutcome) {
+      return mfaOutcome;
+    }
     const code = (err as { code?: string })?.code ?? '';
     if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
       throw new Error('Google sign-in popup was closed before completing.');
@@ -282,20 +630,7 @@ export async function signInAdminWithGoogle(
     throw new Error('A verified Google account email is required for admin access.');
   }
 
-  const remoteAllowlist = isCloudflareBackendEnabled()
-    ? await fetchAdminAllowlistFromCloudflare(user)
-    : await fetchAdminAllowlistFromFirestore();
-  const combinedAllowlist = [
-    ...(extraAdminEmails ?? []),
-    ...(remoteAllowlist ?? []),
-  ];
-
-  if (!isAuthorizedAdminEmail(email, combinedAllowlist)) {
-    await signOut(auth).catch(() => undefined);
-    throw new Error('This email is not authorized for admin access.');
-  }
-
-  return { authenticated: true, email };
+  return evaluateAuthenticatedUserLogin(user, email, extraAdminEmails);
 }
 
 export async function checkFirebaseAdminUser(
@@ -415,6 +750,7 @@ export async function ensureFirestoreSeeded(
 }
 
 export async function logoutAdmin(): Promise<void> {
+  clearPendingAuthChallenges();
   await endWebAdminSession(app, auth.currentUser);
   await signOut(auth).catch(() => undefined);
 }

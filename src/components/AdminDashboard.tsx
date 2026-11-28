@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
+  BarChart3,
   Car,
   Check,
   ChevronDown,
@@ -17,6 +18,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Shield,
   SlidersHorizontal,
   Sparkles,
   Star,
@@ -49,7 +51,18 @@ import {
   shouldAutoFetchTikTokCover,
 } from '../utils/inventory';
 import { didTikTokPostChange } from '../utils/firestoreSyncLogic';
+import {
+  fetchCloudflareLoginAlerts,
+  isCloudflareBackendEnabled,
+  respondToCloudflareLoginAlert,
+  type CloudflareLoginAlert,
+} from '../utils/cloudflareStore';
 import { fetchTikTokVideoMetadata } from '../utils/storeClient';
+import {
+  AdminSecurityTab,
+  AdminVisitorsTab,
+  PendingLoginAlertsBanner,
+} from './AdminSecurityPanel';
 import { SocialMediaIconRow } from './SocialIcons';
 import { VehicleFormModal } from './VehicleFormModal';
 
@@ -76,7 +89,7 @@ interface AdminDashboardProps {
   onSignOut?: () => void;
 }
 
-type AdminTab = 'inventory' | 'tiktok' | 'contact';
+type AdminTab = 'inventory' | 'tiktok' | 'contact' | 'security' | 'visitors';
 type InventorySort = 'newest' | 'price-desc' | 'price-asc' | 'year-desc';
 
 export function AdminDashboard({
@@ -122,6 +135,89 @@ export function AdminDashboard({
   } | null>(null);
   const [importingMobileApp, setImportingMobileApp] = useState(false);
   const [importProgress, setImportProgress] = useState('');
+  const [loginAlerts, setLoginAlerts] = useState<CloudflareLoginAlert[]>([]);
+  const [busyAlertId, setBusyAlertId] = useState<string | null>(null);
+  const seenPendingAlertsRef = useRef<Set<string>>(new Set());
+  const alertsInitializedRef = useRef(false);
+
+  const refreshLoginAlerts = useCallback(async () => {
+    if (!isCloudflareBackendEnabled()) return;
+    try {
+      const { alerts } = await fetchCloudflareLoginAlerts();
+      setLoginAlerts(alerts);
+
+      const pending = alerts.filter((a) => a.decision === 'pending');
+      if (alertsInitializedRef.current) {
+        for (const alert of pending) {
+          if (!seenPendingAlertsRef.current.has(alert.id)) {
+            seenPendingAlertsRef.current.add(alert.id);
+            if (
+              typeof window !== 'undefined' &&
+              'Notification' in window &&
+              Notification.permission === 'granted'
+            ) {
+              try {
+                const title =
+                  alert.alertType === 'unauthorized_email'
+                    ? 'Admin Access Request'
+                    : 'New Device Admin Login';
+                const body = `${alert.email} on ${alert.deviceName}${
+                  alert.verificationCode ? ` · Code: ${alert.verificationCode}` : ''
+                }`;
+                new Notification(title, { body });
+              } catch {
+                // Ignore Notification errors on unsupported browsers
+              }
+            }
+          }
+        }
+      } else {
+        alertsInitializedRef.current = true;
+        for (const alert of pending) {
+          seenPendingAlertsRef.current.add(alert.id);
+        }
+      }
+    } catch {
+      // Non-fatal if Worker is not yet updated
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshLoginAlerts();
+    const timer = window.setInterval(() => {
+      void refreshLoginAlerts();
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [refreshLoginAlerts]);
+
+  const handleAlertDecision = async (alertId: string, decision: 'approved' | 'denied') => {
+    setBusyAlertId(alertId);
+    try {
+      const res = await respondToCloudflareLoginAlert(alertId, decision);
+      await refreshLoginAlerts();
+      setUploadNotice({
+        type: 'success',
+        message:
+          decision === 'approved'
+            ? res.grantedEmail
+              ? `Granted admin access to ${res.grantedEmail}.`
+              : 'Login request approved.'
+            : 'Login request denied and session blocked.',
+      });
+    } catch (err) {
+      setUploadNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Unable to respond to login alert.',
+      });
+    } finally {
+      setBusyAlertId(null);
+    }
+  };
+
+  const pendingAlertCount = useMemo(
+    () => loginAlerts.filter((a) => a.decision === 'pending').length,
+    [loginAlerts]
+  );
 
   const handleImportFromMobileApp = async () => {
     if (!onImportFromFirebase || importingMobileApp) return;
@@ -810,10 +906,19 @@ export function AdminDashboard({
     label: string;
     icon: typeof Car;
     count?: number;
+    highlightBadge?: boolean;
   }[] = [
     { id: 'inventory', label: 'Inventory Manager', icon: Car, count: store.vehicles.length },
     { id: 'tiktok', label: 'TikTok Video Links', icon: Film, count: store.tiktok.posts.length },
     { id: 'contact', label: 'Location & Contact', icon: MapPin },
+    {
+      id: 'security',
+      label: 'Security & Devices',
+      icon: Shield,
+      count: pendingAlertCount > 0 ? pendingAlertCount : undefined,
+      highlightBadge: pendingAlertCount > 0,
+    },
+    { id: 'visitors', label: 'Visitors & Interactions', icon: BarChart3 },
   ];
 
   const activeNav = navItems.find((item) => item.id === activeTab) ?? navItems[0];
@@ -867,7 +972,13 @@ export function AdminDashboard({
                   <span className="truncate">{item.label}</span>
                 </span>
                 {typeof item.count === 'number' && (
-                  <span className="font-mono text-xs text-zinc-400 tabular-nums shrink-0">
+                  <span
+                    className={`font-mono text-xs tabular-nums shrink-0 ${
+                      item.highlightBadge
+                        ? 'px-1.5 py-0.5 rounded bg-amber-500 text-black font-bold'
+                        : 'text-zinc-400'
+                    }`}
+                  >
                     {item.count}
                   </span>
                 )}
@@ -979,13 +1090,18 @@ export function AdminDashboard({
                   role="tab"
                   aria-selected={isActive}
                   onClick={() => setActiveTab(item.id)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-1.5 ${
                     isActive
                       ? 'bg-[#E11D2A] text-white'
                       : 'bg-[#15151a] text-zinc-400 hover:text-white border border-white/[0.06]'
                   }`}
                 >
-                  {item.label}
+                  <span>{item.label}</span>
+                  {item.highlightBadge && typeof item.count === 'number' && (
+                    <span className="px-1.5 py-0.2 rounded bg-amber-400 text-black text-[10px] font-bold tabular-nums">
+                      {item.count}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -1116,7 +1232,14 @@ export function AdminDashboard({
             </div>
           )}
 
+          <PendingLoginAlertsBanner
+            alerts={loginAlerts}
+            onDecide={handleAlertDecision}
+            busyId={busyAlertId}
+          />
+
           {/* Single-Elevation Summary KPI Strip */}
+          {(activeTab === 'inventory' || activeTab === 'tiktok' || activeTab === 'contact') && (
           <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#111115] border border-white/[0.08] rounded-2xl divide-y sm:divide-y-0 sm:divide-x divide-white/[0.06] overflow-hidden">
             <div className="p-4 sm:p-5">
               <span className="block text-xs text-zinc-400">Total Fleet</span>
@@ -1149,6 +1272,7 @@ export function AdminDashboard({
               <span className="mt-1 block text-xs text-zinc-500">Completed deliveries</span>
             </div>
           </div>
+          )}
 
           {/* TAB 1: INVENTORY MANAGER */}
           {activeTab === 'inventory' && (
@@ -2803,6 +2927,18 @@ export function AdminDashboard({
             </div>
           </section>
         )}
+
+          {/* TAB 4: SECURITY, 2FA, ACTIVE DEVICES & LOGIN ALERTS */}
+          {activeTab === 'security' && (
+            <AdminSecurityTab
+              alerts={loginAlerts}
+              onAlertsUpdated={refreshLoginAlerts}
+              onForceSignOutSelf={() => onSignOut?.()}
+            />
+          )}
+
+          {/* TAB 5: VISITORS & INTERACTIONS */}
+          {activeTab === 'visitors' && <AdminVisitorsTab />}
         </main>
       </div>
 

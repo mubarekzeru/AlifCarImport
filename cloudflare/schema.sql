@@ -109,3 +109,33 @@ CREATE TABLE IF NOT EXISTS login_alerts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_login_alerts_time ON login_alerts (timestamp_millis DESC);
+
+CREATE TABLE IF NOT EXISTS admin_security (
+  id TEXT PRIMARY KEY,
+  two_factor_enabled INTEGER NOT NULL DEFAULT 0,
+  totp_secret TEXT NOT NULL DEFAULT '',
+  require_device_approval INTEGER NOT NULL DEFAULT 1,
+  login_alerts_enabled INTEGER NOT NULL DEFAULT 1,
+  trusted_devices_json TEXT NOT NULL DEFAULT '[]',
+  updated_at_ms INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS auth_challenges (
+  id TEXT PRIMARY KEY,
+  uid TEXT NOT NULL,
+  email TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  device_name TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  location TEXT NOT NULL DEFAULT '',
+  code_hash TEXT NOT NULL,
+  code_display TEXT NOT NULL,
+  alert_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_challenges_alert ON auth_challenges (alert_id);
+

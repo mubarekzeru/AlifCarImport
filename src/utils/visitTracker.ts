@@ -109,15 +109,14 @@ function getOrCreateVisitorId(): string {
  * Records a public showroom page visit once per browser session per pathname
  * in the shared Firestore `pageVisits` collection. Admin routes are excluded.
  */
-export async function trackWebsiteVisit(db: Firestore): Promise<void> {
+export async function trackWebsiteVisit(db: Firestore, routePath?: string): Promise<void> {
   if (typeof window === 'undefined') return;
   try {
-    const path = normalizeVisitPath(window.location.pathname);
+    const path = normalizeVisitPath(routePath ?? window.location.pathname);
     if (!shouldTrackVisitPath(path)) return;
 
     const sessionKey = buildVisitSessionKey(path);
     if (hasVisitedInSession(sessionKey)) return;
-    markVisitedInSession(sessionKey);
 
     const visitorId = getOrCreateVisitorId();
     const referrer = typeof document !== 'undefined' ? document.referrer : '';
@@ -143,6 +142,7 @@ export async function trackWebsiteVisit(db: Firestore): Promise<void> {
         userAgent: payload.userAgent,
         timestampMillis: payload.timestampMillis,
       });
+      markVisitedInSession(sessionKey);
       return;
     }
 
@@ -156,6 +156,7 @@ export async function trackWebsiteVisit(db: Firestore): Promise<void> {
     });
 
     await setDoc(visitRef, payload);
+    markVisitedInSession(sessionKey);
   } catch (err) {
     console.warn('Visitor tracking skipped:', err);
   }

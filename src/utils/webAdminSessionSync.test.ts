@@ -58,6 +58,12 @@ test('detectBrowserDeviceName identifies browser and OS cleanly', () => {
     ),
     'Firefox on macOS'
   );
+  assert.equal(
+    detectBrowserDeviceName(
+      'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36'
+    ),
+    'Samsung Internet on Android'
+  );
   assert.equal(detectBrowserDeviceName(''), 'Web Browser on Web');
 });
 

@@ -12,14 +12,20 @@ import {
 } from 'firebase/firestore';
 import {
   checkCloudflareSecurityForceSignOut,
+  checkCloudflareSessionStatus,
   isCloudflareBackendEnabled,
   revokeCloudflareAdminSession,
   upsertCloudflareAdminSession,
 } from './cloudflareStore';
+import {
+  extractAppTwoFactorConfig,
+  type ExtractedTwoFactorConfig,
+} from './totp';
 
 export const WEB_ADMIN_FIRESTORE_DB_ID =
   'ai-studio-alifcarportal-c5b73261-7322-4966-b5e2-59c51963e99b';
 const DEVICE_ID_KEY = 'alif_web_admin_device_id';
+const VERIFIED_SESSION_KEY = 'alif_web_admin_verified_uid';
 
 export interface WebAdminSessionOptions {
   onForcedSignOut?: () => void;
@@ -109,7 +115,9 @@ export function detectBrowserDeviceName(userAgent?: string): string {
       ? navigator.userAgent
       : '');
 
-  const browser = /Edg\//.test(ua)
+  const browser = /SamsungBrowser\//i.test(ua)
+    ? 'Samsung Internet'
+    : /Edg\//.test(ua)
     ? 'Edge'
     : /Chrome\//.test(ua)
     ? 'Chrome'
@@ -143,7 +151,7 @@ export function getFallbackLocation(): string {
   }
 }
 
-function getOrCreateWebDeviceId(): string {
+export function getOrCreateWebDeviceId(): string {
   if (typeof window === 'undefined') {
     return 'browser';
   }
@@ -159,6 +167,35 @@ function getOrCreateWebDeviceId(): string {
     return id;
   } catch {
     return `${Date.now()}_${Math.random().toString(36).slice(2)}`.replace(/-/g, '');
+  }
+}
+
+export function markWebAdminSessionVerified(uid: string): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem(VERIFIED_SESSION_KEY, uid);
+    }
+  } catch {
+    // Ignore sessionStorage restrictions
+  }
+}
+
+export function isWebAdminSessionVerified(uid: string): boolean {
+  try {
+    if (typeof window === 'undefined') return false;
+    return window.sessionStorage.getItem(VERIFIED_SESSION_KEY) === uid;
+  } catch {
+    return false;
+  }
+}
+
+export function clearWebAdminSessionVerified(): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem(VERIFIED_SESSION_KEY);
+    }
+  } catch {
+    // Ignore
   }
 }
 
@@ -227,7 +264,12 @@ export async function checkForceSignOutBySecurityConfig(
 ): Promise<boolean> {
   if (!user || !user.emailVerified) return false;
   if (isCloudflareBackendEnabled()) {
-    return checkCloudflareSecurityForceSignOut(auth, user, options?.onForcedSignOut);
+    const cfForced = await checkCloudflareSecurityForceSignOut(
+      auth,
+      user,
+      options?.onForcedSignOut
+    );
+    if (cfForced) return true;
   }
   try {
     const db = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
@@ -240,6 +282,65 @@ export async function checkForceSignOutBySecurityConfig(
     console.warn('Unable to read config/security document:', err);
     return false;
   }
+}
+
+/**
+ * Reads 2FA / Authenticator settings saved by the companion Android app in Firestore
+ * (checks config/security, config/twoFactor, and admins/{uid} on the shared DB).
+ */
+export async function readFirestoreAppTwoFactorConfig(
+  firebaseApp: FirebaseApp,
+  user: User | null | undefined
+): Promise<ExtractedTwoFactorConfig> {
+  if (!user || !user.emailVerified) {
+    return { enabled: false, secret: '', backupCodes: [] };
+  }
+
+  const dbCandidates = [
+    () => getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID),
+    () => getFirestore(firebaseApp),
+  ];
+
+  const docPaths: [string, string][] = [
+    ['config', 'security'],
+    ['admins', user.uid],
+    ['users', user.uid],
+    ['config', 'twoFactor'],
+  ];
+
+  let enabled = false;
+  let secret = '';
+  const backupCodes: string[] = [];
+
+  for (const getDb of dbCandidates) {
+    let targetDb;
+    try {
+      targetDb = getDb();
+    } catch {
+      continue;
+    }
+
+    for (const [col, id] of docPaths) {
+      try {
+        const snap = await getDoc(doc(targetDb, col, id));
+        if (!snap.exists()) continue;
+        const extracted = extractAppTwoFactorConfig(snap.data() as Record<string, unknown>);
+        if (extracted.enabled) enabled = true;
+        if (!secret && extracted.secret) secret = extracted.secret;
+        for (const c of extracted.backupCodes) {
+          if (!backupCodes.includes(c)) backupCodes.push(c);
+        }
+        if (enabled && secret) {
+          return { enabled, secret, backupCodes };
+        }
+      } catch {
+        // Ignore missing permissions or absent docs on candidate paths
+      }
+    }
+    if (enabled || secret) break;
+  }
+
+  return { enabled, secret, backupCodes };
 }
 
 /**
@@ -262,6 +363,14 @@ export async function startWebAdminSession(
   const startGen = watchGeneration;
 
   try {
+    const deviceName = detectBrowserDeviceName();
+    const email = (user.email || '').trim().slice(0, 254);
+    const location = getFallbackLocation();
+    const userAgent = (
+      typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
+    ).slice(0, 300);
+    const now = Date.now();
+
     if (isCloudflareBackendEnabled()) {
       if (!options?.skipInitialSecurityCheck) {
         const forcedOut = await checkCloudflareSecurityForceSignOut(
@@ -274,17 +383,17 @@ export async function startWebAdminSession(
         }
       }
 
-      const now = Date.now();
       await upsertCloudflareAdminSession(user, sessionId, {
         deviceId,
-        deviceName: detectBrowserDeviceName(),
+        deviceName,
         platform: 'Website',
-        location: getFallbackLocation(),
+        location,
         loginAtMillis: now,
         status: 'active',
-        userAgent: (
-          typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
-        ).slice(0, 300),
+        userAgent,
+        forceActivate: true,
+      }).catch((err) => {
+        console.warn('Unable to sync Cloudflare admin session:', err);
       });
 
       if (startGen !== watchGeneration) return false;
@@ -300,12 +409,129 @@ export async function startWebAdminSession(
       if (typeof window !== 'undefined') {
         cloudflarePollTimer = window.setInterval(() => {
           if (activeGen !== watchGeneration) return;
-          void checkCloudflareSecurityForceSignOut(auth, user, () => {
-            stopWebSessionWatcher();
-            options?.onForcedSignOut?.();
-          });
-        }, 30_000);
+          void (async () => {
+            try {
+              const st = await checkCloudflareSessionStatus(user, sessionId);
+              if (activeGen !== watchGeneration) return;
+              const tokenResult = await user.getIdTokenResult();
+              const authTimeMs = new Date(tokenResult.authTime).getTime();
+              const cutOffHit =
+                st.forceSignOutBeforeMs > 0 &&
+                Number.isFinite(authTimeMs) &&
+                authTimeMs < st.forceSignOutBeforeMs;
+              if (st.revoked || cutOffHit) {
+                clearWebAdminSessionVerified();
+                stopWebSessionWatcher();
+                options?.onForcedSignOut?.();
+                await signOut(auth).catch(() => undefined);
+              }
+            } catch (err) {
+              const status = (err as { status?: number })?.status;
+              if (status === 401) {
+                clearWebAdminSessionVerified();
+                stopWebSessionWatcher();
+                options?.onForcedSignOut?.();
+                await signOut(auth).catch(() => undefined);
+              }
+            }
+          })();
+        }, 15_000);
       }
+
+      // Also mirror session & login alert to the shared Firestore database so the
+      // companion Android app's Current Devices count and Login Alerts see web logins.
+      try {
+        const sharedDb = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
+        const sessionRef = doc(sharedDb, 'adminSessions', sessionId);
+        const existingSnap = await getDoc(sessionRef);
+        if (activeGen === watchGeneration) {
+          if (!existingSnap.exists()) {
+            await setDoc(sessionRef, {
+              id: sessionId,
+              uid: user.uid.slice(0, 128),
+              deviceId,
+              deviceName,
+              platform: 'Website',
+              email,
+              location,
+              loginAtMillis: now,
+              lastActiveMillis: now,
+              status: 'active',
+              userAgent,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            await updateDoc(sessionRef, {
+              deviceName,
+              platform: 'Website',
+              email,
+              location,
+              loginAtMillis: now,
+              lastActiveMillis: now,
+              status: 'active',
+              userAgent,
+              updatedAt: serverTimestamp(),
+            });
+          }
+
+          const alertFlagKey = `alif_web_alert_sent_${user.uid}_${user.metadata?.lastSignInTime || ''}`;
+          let alertAlreadySent = false;
+          try {
+            alertAlreadySent = Boolean(window.sessionStorage.getItem(alertFlagKey));
+          } catch {
+            alertAlreadySent = false;
+          }
+
+          if (!alertAlreadySent) {
+            const alertId = generateAlertId(now);
+            await setDoc(doc(sharedDb, 'loginAlerts', alertId), {
+              id: alertId,
+              sessionId,
+              uid: user.uid.slice(0, 128),
+              email,
+              deviceName,
+              platform: 'Website',
+              location,
+              timestampMillis: now,
+              decision: 'pending',
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            try {
+              window.sessionStorage.setItem(alertFlagKey, '1');
+            } catch {
+              // Ignore sessionStorage restrictions
+            }
+          }
+
+          unsubscribeSessionWatch = onSnapshot(
+            sessionRef,
+            (snap) => {
+              if (activeGen !== watchGeneration) return;
+              if (snap.exists() && snap.data()?.status === 'revoked') {
+                clearWebAdminSessionVerified();
+                stopWebSessionWatcher();
+                options?.onForcedSignOut?.();
+                void signOut(auth);
+              }
+            },
+            () => undefined
+          );
+
+          unsubscribeSecurityWatch = onSnapshot(
+            doc(sharedDb, 'config', 'security'),
+            (snap) => {
+              if (activeGen !== watchGeneration || !snap.exists()) return;
+              void evaluateSecurityForceSignOut(auth, user, snap.data(), options);
+            },
+            () => undefined
+          );
+        }
+      } catch {
+        // Non-fatal if Firestore quota or rules restrict mirroring
+      }
+
       return true;
     }
 
@@ -324,14 +550,6 @@ export async function startWebAdminSession(
         return false;
       }
     }
-
-    const deviceName = detectBrowserDeviceName();
-    const email = (user.email || '').trim().slice(0, 254);
-    const location = getFallbackLocation();
-    const userAgent = (
-      typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
-    ).slice(0, 300);
-    const now = Date.now();
 
     const sessionRef = doc(db, 'adminSessions', sessionId);
     const existingSnap = await getDoc(sessionRef);
@@ -454,14 +672,14 @@ export async function endWebAdminSession(
   firebaseApp: FirebaseApp,
   user: User | null | undefined
 ): Promise<void> {
+  clearWebAdminSessionVerified();
   stopWebSessionWatcher();
   if (!user) return;
   try {
     const deviceId = getOrCreateWebDeviceId().slice(0, 128);
     const sessionId = buildWebAdminSessionId(user.uid, deviceId);
     if (isCloudflareBackendEnabled()) {
-      await revokeCloudflareAdminSession(user, sessionId);
-      return;
+      await revokeCloudflareAdminSession(user, sessionId).catch(() => undefined);
     }
     const db = getFirestore(firebaseApp, WEB_ADMIN_FIRESTORE_DB_ID);
     await updateDoc(doc(db, 'adminSessions', sessionId), {

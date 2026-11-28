@@ -55,19 +55,7 @@ export const DEFAULT_CLOUDFLARE_API_URL =
   'https://alif-car-import-api.alifcarimports.workers.dev';
 
 export function getCloudflareApiBaseUrl(): string {
-  const envVal =
-    typeof import.meta !== 'undefined' && import.meta.env
-      ? (import.meta.env.VITE_CLOUDFLARE_API_URL as string | undefined)
-      : undefined;
-  const trimmed = typeof envVal === 'string' ? envVal.trim() : '';
-  if (
-    trimmed.toLowerCase() === 'disabled' ||
-    trimmed.toLowerCase() === 'false' ||
-    trimmed.toLowerCase() === 'off'
-  ) {
-    return '';
-  }
-  return normalizeCloudflareApiUrl(trimmed || DEFAULT_CLOUDFLARE_API_URL);
+  return normalizeCloudflareApiUrl(DEFAULT_CLOUDFLARE_API_URL);
 }
 
 export function isCloudflareBackendEnabled(): boolean {
@@ -77,7 +65,7 @@ export function isCloudflareBackendEnabled(): boolean {
 export function buildCloudflareEndpoint(path: string, baseUrlOverride?: string): string {
   const base = normalizeCloudflareApiUrl(baseUrlOverride ?? getCloudflareApiBaseUrl());
   if (!base) {
-    throw new Error('Cloudflare API URL (VITE_CLOUDFLARE_API_URL) is not configured.');
+    throw new Error('Cloudflare API URL is not configured.');
   }
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return `${base}${cleanPath}`;
@@ -615,9 +603,82 @@ export async function trackVisitToCloudflare(payload: {
 }): Promise<void> {
   await cloudflareFetchJson('/api/visits', {
     method: 'POST',
+    keepalive: true,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+}
+
+export interface CloudflareSecurityStatus {
+  forceSignOutBeforeMs: number;
+  twoFactorEnabled: boolean;
+  hasTotpSecret: boolean;
+  requireDeviceApproval: boolean;
+  loginAlertsEnabled: boolean;
+  trustedDeviceCount: number;
+}
+
+export interface CloudflareAdminSession {
+  id: string;
+  uid: string;
+  deviceId: string;
+  deviceName: string;
+  platform: string;
+  email: string;
+  location: string;
+  loginAtMillis: number;
+  lastActiveMillis: number;
+  status: 'active' | 'revoked' | 'pending_verification' | string;
+  userAgent: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface CloudflareLoginAlert {
+  id: string;
+  sessionId: string;
+  uid: string;
+  email: string;
+  deviceName: string;
+  platform: string;
+  location: string;
+  timestampMillis: number;
+  decision: 'pending' | 'approved' | 'denied' | 'notified' | string;
+  alertType: 'unauthorized_email' | 'new_device';
+  verificationCode?: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface CloudflareVisitorAnalytics {
+  totalVisits: number;
+  uniqueVisitors: number;
+  todayVisits: number;
+  todayUnique: number;
+  last7DaysVisits: number;
+  inquiriesCount: number;
+  dailyStats: Array<{ dateKey: string; visits: number; uniqueVisitors: number }>;
+  topPages: Array<{ page: string; visits: number }>;
+  recent: Array<{
+    id: string;
+    page: string;
+    visitorId: string;
+    dateKey: string;
+    referrer: string;
+    userAgent: string;
+    timestampMillis: number;
+  }>;
+}
+
+export interface CloudflareStartLoginResult {
+  status: 'verified' | 'requires_verification';
+  sessionId: string;
+  alertId?: string;
+  challengeId?: string;
+  twoFactorEnabled?: boolean;
+  hasTotp?: boolean;
+  requireDeviceApproval?: boolean;
+  hasOtherDevices?: boolean;
 }
 
 export async function checkCloudflareSecurityForceSignOut(
@@ -653,6 +714,30 @@ export async function checkCloudflareSecurityForceSignOut(
   }
 }
 
+export async function checkCloudflareSessionStatus(
+  user: User,
+  sessionId: string
+): Promise<{
+  revoked: boolean;
+  forceSignOutBeforeMs: number;
+  pendingAlertsCount: number;
+}> {
+  const headers = await getFirebaseAdminBearerHeaders(user);
+  const res = await cloudflareFetchJson<{
+    session?: CloudflareAdminSession | null;
+    forceSignOutBeforeMs?: number;
+    pendingAlertsCount?: number;
+  }>(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'GET',
+    headers,
+  });
+  return {
+    revoked: Boolean(res.session && res.session.status === 'revoked'),
+    forceSignOutBeforeMs: Number(res.forceSignOutBeforeMs ?? 0),
+    pendingAlertsCount: Number(res.pendingAlertsCount ?? 0),
+  };
+}
+
 export async function upsertCloudflareAdminSession(
   user: User,
   sessionId: string,
@@ -662,8 +747,10 @@ export async function upsertCloudflareAdminSession(
     platform: string;
     location: string;
     loginAtMillis: number;
-    status: 'active' | 'revoked';
+    status: 'active' | 'revoked' | 'pending_verification';
     userAgent: string;
+    forceActivate?: boolean;
+    recordAlert?: boolean;
   }
 ): Promise<void> {
   const headers = await getFirebaseAdminBearerHeaders(user);
@@ -675,7 +762,7 @@ export async function upsertCloudflareAdminSession(
 }
 
 export async function revokeCloudflareAdminSession(
-  user: User,
+  user: User | null | undefined,
   sessionId: string
 ): Promise<void> {
   const headers = await getFirebaseAdminBearerHeaders(user);
@@ -684,3 +771,251 @@ export async function revokeCloudflareAdminSession(
     headers,
   });
 }
+
+export async function reportUnauthorizedLoginAttempt(
+  user: User,
+  payload: {
+    deviceId: string;
+    deviceName: string;
+    platform: string;
+    location: string;
+  }
+): Promise<{ alertId: string; authorized: boolean; decision: string }> {
+  const headers = await getFirebaseAdminBearerHeaders(user);
+  return cloudflareFetchJson('/api/auth/login-alert', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function pollUnauthorizedAccessRequest(
+  user: User,
+  alertId: string
+): Promise<{ id: string; decision: string; authorized: boolean }> {
+  const headers = await getFirebaseAdminBearerHeaders(user);
+  return cloudflareFetchJson(`/api/auth/request-status/${encodeURIComponent(alertId)}`, {
+    method: 'GET',
+    headers,
+  });
+}
+
+export async function startCloudflareAdminLogin(
+  user: User,
+  payload: {
+    deviceId: string;
+    sessionId: string;
+    deviceName: string;
+    platform: string;
+    location: string;
+    userAgent: string;
+  }
+): Promise<CloudflareStartLoginResult> {
+  const headers = await getFirebaseAdminBearerHeaders(user);
+  return cloudflareFetchJson<CloudflareStartLoginResult>('/api/admin/security/start-login', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function verifyCloudflareAuthCode(
+  user: User,
+  challengeId: string,
+  code: string,
+  trustDevice = true
+): Promise<{ ok: boolean; verified: boolean; sessionId: string }> {
+  const headers = await getFirebaseAdminBearerHeaders(user);
+  return cloudflareFetchJson('/api/admin/security/verify-code', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ challengeId, code, trustDevice }),
+  });
+}
+
+export async function pollCloudflareLoginChallenge(
+  user: User,
+  challengeId: string
+): Promise<{ id: string; sessionId: string; status: string }> {
+  const headers = await getFirebaseAdminBearerHeaders(user);
+  return cloudflareFetchJson(`/api/admin/security/challenge/${encodeURIComponent(challengeId)}`, {
+    method: 'GET',
+    headers,
+  });
+}
+
+export async function fetchCloudflareSecurityStatus(): Promise<CloudflareSecurityStatus> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  const res = await cloudflareFetchJson<Partial<CloudflareSecurityStatus>>('/api/admin/security', {
+    method: 'GET',
+    headers,
+  });
+  return {
+    forceSignOutBeforeMs: Number(res.forceSignOutBeforeMs ?? 0),
+    twoFactorEnabled: Boolean(res.twoFactorEnabled),
+    hasTotpSecret: Boolean(res.hasTotpSecret),
+    requireDeviceApproval: res.requireDeviceApproval !== false,
+    loginAlertsEnabled: res.loginAlertsEnabled !== false,
+    trustedDeviceCount: Number(res.trustedDeviceCount ?? 0),
+  };
+}
+
+export async function updateCloudflareSecuritySettings(patch: {
+  twoFactorEnabled?: boolean;
+  requireDeviceApproval?: boolean;
+  loginAlertsEnabled?: boolean;
+  clearTrustedDevices?: boolean;
+}): Promise<CloudflareSecurityStatus> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  const res = await cloudflareFetchJson<Partial<CloudflareSecurityStatus>>('/api/admin/security', {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(patch),
+  });
+  return {
+    forceSignOutBeforeMs: Number(res.forceSignOutBeforeMs ?? 0),
+    twoFactorEnabled: Boolean(res.twoFactorEnabled),
+    hasTotpSecret: Boolean(res.hasTotpSecret),
+    requireDeviceApproval: res.requireDeviceApproval !== false,
+    loginAlertsEnabled: res.loginAlertsEnabled !== false,
+    trustedDeviceCount: Number(res.trustedDeviceCount ?? 0),
+  };
+}
+
+export async function setupCloudflareTotp(): Promise<{
+  secret: string;
+  otpauthUrl: string;
+  twoFactorEnabled: boolean;
+}> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  return cloudflareFetchJson('/api/admin/security/totp/setup', {
+    method: 'POST',
+    headers,
+  });
+}
+
+export async function enableCloudflareTotp(code: string): Promise<{ ok: boolean; twoFactorEnabled: boolean }> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  return cloudflareFetchJson('/api/admin/security/totp/enable', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function disableCloudflareTotp(): Promise<{ ok: boolean; twoFactorEnabled: boolean }> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  return cloudflareFetchJson('/api/admin/security/totp/disable', {
+    method: 'POST',
+    headers,
+  });
+}
+
+export async function forceSignOutAllCloudflareDevices(): Promise<{ ok: boolean; forceSignOutBeforeMs: number }> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  return cloudflareFetchJson('/api/admin/security/force-sign-out', {
+    method: 'POST',
+    headers,
+  });
+}
+
+export async function fetchCloudflareAdminSessions(): Promise<{
+  sessions: CloudflareAdminSession[];
+  activeCount: number;
+}> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  const res = await cloudflareFetchJson<{
+    sessions?: Array<Record<string, unknown>>;
+    activeCount?: number;
+  }>('/api/admin/sessions', {
+    method: 'GET',
+    headers,
+  });
+  const sessions: CloudflareAdminSession[] = (Array.isArray(res.sessions) ? res.sessions : []).map((r) => ({
+    id: String(r.id ?? ''),
+    uid: String(r.uid ?? ''),
+    deviceId: String(r.deviceId ?? r.device_id ?? ''),
+    deviceName: String(r.deviceName ?? r.device_name ?? 'Device'),
+    platform: String(r.platform ?? 'Website'),
+    email: String(r.email ?? ''),
+    location: String(r.location ?? ''),
+    loginAtMillis: Number(r.loginAtMillis ?? r.login_at_millis ?? 0),
+    lastActiveMillis: Number(r.lastActiveMillis ?? r.last_active_millis ?? 0),
+    status: String(r.status ?? 'active'),
+    userAgent: String(r.userAgent ?? r.user_agent ?? ''),
+    createdAtMs: Number(r.createdAtMs ?? r.created_at_ms ?? 0),
+    updatedAtMs: Number(r.updatedAtMs ?? r.updated_at_ms ?? 0),
+  }));
+  const activeCount =
+    typeof res.activeCount === 'number'
+      ? res.activeCount
+      : sessions.filter((s) => s.status === 'active').length;
+  return { sessions, activeCount };
+}
+
+export async function fetchCloudflareLoginAlerts(): Promise<{
+  alerts: CloudflareLoginAlert[];
+  pendingCount: number;
+}> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  const res = await cloudflareFetchJson<{
+    alerts?: CloudflareLoginAlert[];
+    pendingCount?: number;
+  }>('/api/admin/login-alerts', {
+    method: 'GET',
+    headers,
+  });
+  const alerts = Array.isArray(res.alerts) ? res.alerts : [];
+  const pendingCount =
+    typeof res.pendingCount === 'number'
+      ? res.pendingCount
+      : alerts.filter((a) => a.decision === 'pending').length;
+  return { alerts, pendingCount };
+}
+
+export async function respondToCloudflareLoginAlert(
+  alertId: string,
+  decision: 'approved' | 'denied'
+): Promise<{ ok: boolean; id: string; decision: string; grantedEmail?: string | null }> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  return cloudflareFetchJson(`/api/admin/login-alerts/${encodeURIComponent(alertId)}/decision`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ decision }),
+  });
+}
+
+export async function fetchCloudflareVisitorAnalytics(): Promise<CloudflareVisitorAnalytics> {
+  const headers = await getFirebaseAdminBearerHeaders();
+  const res = await cloudflareFetchJson<Partial<CloudflareVisitorAnalytics>>(
+    '/api/admin/visits/summary',
+    {
+      method: 'GET',
+      headers,
+    }
+  );
+  const rawRecent = Array.isArray(res.recent) ? res.recent : [];
+  return {
+    totalVisits: Number(res.totalVisits ?? 0),
+    uniqueVisitors: Number(res.uniqueVisitors ?? 0),
+    todayVisits: Number(res.todayVisits ?? 0),
+    todayUnique: Number(res.todayUnique ?? 0),
+    last7DaysVisits: Number(res.last7DaysVisits ?? 0),
+    inquiriesCount: Number(res.inquiriesCount ?? 0),
+    dailyStats: Array.isArray(res.dailyStats) ? res.dailyStats : [],
+    topPages: Array.isArray(res.topPages) ? res.topPages : [],
+    recent: rawRecent.map((item) => {
+      const r = item as Record<string, unknown>;
+      return {
+        id: String(r.id ?? ''),
+        page: String(r.page ?? '/'),
+        visitorId: String(r.visitorId ?? r.visitor_id ?? ''),
+        dateKey: String(r.dateKey ?? r.date_key ?? ''),
+        referrer: String(r.referrer ?? ''),
+        userAgent: String(r.userAgent ?? r.user_agent ?? ''),
+        timestampMillis: Number(r.timestampMillis ?? r.timestamp_millis ?? 0),
+      };
+    }),
+  };
+}
+

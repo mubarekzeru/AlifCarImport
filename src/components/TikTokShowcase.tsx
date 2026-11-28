@@ -5,11 +5,13 @@ import { getTikTokGridLayoutMetrics } from '../utils/firestoreSyncLogic';
 import {
   buildSocialMediaUrl,
   deriveTitleFromVideoDescription,
+  extractTikTokVideoId,
   filterActiveTikTokPosts,
   isPlaceholderTikTokCover,
   normalizeTikTokUrl,
 } from '../utils/inventory';
 import { fetchTikTokVideoMetadata } from '../utils/storeClient';
+import { buildTikTokAppLaunchProps } from '../utils/tiktokDeepLink';
 import { ScrollReveal } from './ScrollReveal';
 
 interface TikTokShowcaseProps {
@@ -20,6 +22,7 @@ interface TikTokShowcaseProps {
 interface ResolvedPostMedia {
   coverUrl?: string;
   resolvedUrl?: string;
+  videoId?: string | null;
   title?: string;
   loading?: boolean;
 }
@@ -94,6 +97,7 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
             [post.id]: {
               coverUrl: meta.coverImageUrl || meta.coverOptions[0]?.url || prev[post.id]?.coverUrl,
               resolvedUrl: meta.resolvedUrl || prev[post.id]?.resolvedUrl,
+              videoId: meta.videoId || extractTikTokVideoId(meta.resolvedUrl) || prev[post.id]?.videoId || null,
               title: meta.suggestedTitle || undefined,
               loading: false,
             },
@@ -169,12 +173,13 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
               const followHref =
                 buildSocialMediaUrl('tiktok', tiktok.profileUrl) ||
                 buildSocialMediaUrl('tiktok', tiktok.handle);
-              if (!followHref) return null;
+              const launchProps = followHref ? buildTikTokAppLaunchProps(followHref) : null;
+              if (!launchProps) return null;
               return (
                 <a
-                  href={followHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href={launchProps.href}
+                  target={launchProps.target}
+                  rel={launchProps.rel}
                   className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#D92027] hover:bg-[#B91C1C] text-white text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap"
                 >
                   <span>Follow {tiktok.handle.trim() || 'TikTok'}</span>
@@ -230,12 +235,14 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
             >
               {activePosts.map((post) => {
                 const resolved = resolvedByPostId[post.id];
-                const targetUrl =
+                const rawTargetUrl =
                   resolved?.resolvedUrl ||
                   normalizeTikTokUrl(post.tiktokUrl) ||
                   buildSocialMediaUrl('tiktok', tiktok.profileUrl) ||
                   buildSocialMediaUrl('tiktok', tiktok.handle) ||
-                  undefined;
+                  '';
+                const videoId = resolved?.videoId || extractTikTokVideoId(rawTargetUrl) || null;
+                const launchProps = buildTikTokAppLaunchProps(rawTargetUrl, videoId);
                 const coverSrc =
                   (!brokenCoverIds[post.id] && !isPlaceholderTikTokCover(post.coverImageUrl)
                     ? post.coverImageUrl
@@ -314,9 +321,9 @@ export function TikTokShowcase({ tiktok, loading = false }: TikTokShowcaseProps)
                       className="relative aspect-[9/15] lg:aspect-[9/13.5] w-full bg-zinc-950 overflow-hidden"
                     >
                       <a
-                        href={targetUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        href={launchProps?.href}
+                        target={launchProps?.target}
+                        rel={launchProps?.rel}
                         aria-label={`Watch ${displayTitle} on TikTok`}
                         className="relative block w-full h-full text-left"
                       >

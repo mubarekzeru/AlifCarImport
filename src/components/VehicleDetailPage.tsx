@@ -24,6 +24,7 @@ import {
   normalizeTikTokUrl,
   resolvePublicAssetUrl,
 } from '../utils/inventory';
+import { buildTikTokAppLaunchProps } from '../utils/tiktokDeepLink';
 import { ScrollReveal } from './ScrollReveal';
 import { VehicleCard } from './VehicleCard';
 
@@ -512,18 +513,25 @@ export function VehicleDetailPage({
                   );
                 })()}
 
-                {normalizeTikTokUrl(vehicle.tiktokUrl) && (
-                  <a
-                    href={normalizeTikTokUrl(vehicle.tiktokUrl)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full h-10 inline-flex items-center justify-center gap-2 px-4 border border-zinc-800 bg-[#18181d] hover:border-zinc-600 text-xs font-medium text-zinc-200 hover:text-white rounded-lg transition-colors"
-                  >
-                    <Film className="w-4 h-4 text-[#D92027]" aria-hidden="true" />
-                    <span>Watch Walkaround on TikTok</span>
-                    <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-                  </a>
-                )}
+                {(() => {
+                  const normalizedTikTok = normalizeTikTokUrl(vehicle.tiktokUrl);
+                  const launchProps = normalizedTikTok
+                    ? buildTikTokAppLaunchProps(normalizedTikTok)
+                    : null;
+                  if (!launchProps) return null;
+                  return (
+                    <a
+                      href={launchProps.href}
+                      target={launchProps.target}
+                      rel={launchProps.rel}
+                      className="w-full h-10 inline-flex items-center justify-center gap-2 px-4 border border-zinc-800 bg-[#18181d] hover:border-zinc-600 text-xs font-medium text-zinc-200 hover:text-white rounded-lg transition-colors"
+                    >
+                      <Film className="w-4 h-4 text-[#D92027]" aria-hidden="true" />
+                      <span>Watch Walkaround on TikTok</span>
+                      <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                    </a>
+                  );
+                })()}
               </div>
 
               {/* Specifications Table */}

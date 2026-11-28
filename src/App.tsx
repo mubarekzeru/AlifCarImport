@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { ArrowLeft, Eye, EyeOff, Lock, Mail } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, ShieldAlert } from 'lucide-react';
 import { MotionConfig } from 'motion/react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -43,19 +43,25 @@ import {
 import {
   cacheShowroomConfigLocally,
   cacheShowroomStoreLocally,
+  completePendingAdminLoginAfterGrant,
   deleteTikTokPostFromStore,
   deleteVehicleFromStore,
   ensureFirestoreSeeded,
   importMobileAppDataToCloudflare,
   logoutAdmin,
+  pollAdminAccessGrantRequest,
+  pollAdminLoginVerification,
   readCachedShowroomStore,
   resetShowroomStore,
   saveShowroomStore,
   signInAdminWithEmailPassword,
   signInAdminWithGoogle,
+  verifyAdminAuthenticationCode,
+  type AdminSignInOutcome,
 } from './utils/storeClient';
 import {
   checkForceSignOutBySecurityConfig,
+  isWebAdminSessionVerified,
   startWebAdminSession,
   stopWebSessionWatcher,
 } from './utils/webAdminSessionSync';
@@ -210,15 +216,101 @@ function AdminLoginView({
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [authCode, setAuthCode] = useState('');
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  const [pendingStep, setPendingStep] = useState<
+    | null
+    | Extract<AdminSignInOutcome, { status: 'requires_verification' }>
+    | Extract<AdminSignInOutcome, { status: 'pending_access_grant' }>
+  >(null);
+
+  const handleOutcome = (outcome: AdminSignInOutcome) => {
+    if (outcome.status === 'verified') {
+      setPendingStep(null);
+      onAuthenticated(outcome.email);
+      return;
+    }
+    setPendingStep(outcome);
+    setAuthCode('');
+  };
+
+  useEffect(() => {
+    if (!pendingStep) return;
+    let active = true;
+
+    if (pendingStep.status === 'requires_verification') {
+      const timer = window.setInterval(async () => {
+        if (!active) return;
+        try {
+          const poll = await pollAdminLoginVerification(pendingStep.challengeId);
+          if (!active) return;
+          if (poll.status === 'approved') {
+            window.clearInterval(timer);
+            setPendingStep(null);
+            onAuthenticated(pendingStep.email);
+          } else if (poll.status === 'denied') {
+            window.clearInterval(timer);
+            await logoutAdmin().catch(() => undefined);
+            setPendingStep(null);
+            setError('This login attempt was denied from another admin device.');
+          } else if (poll.status === 'expired') {
+            window.clearInterval(timer);
+            await logoutAdmin().catch(() => undefined);
+            setPendingStep(null);
+            setError('Verification code expired. Please sign in again.');
+          }
+        } catch {
+          // Retry next poll interval
+        }
+      }, 3000);
+      return () => {
+        active = false;
+        window.clearInterval(timer);
+      };
+    }
+
+    if (pendingStep.status === 'pending_access_grant') {
+      const timer = window.setInterval(async () => {
+        if (!active) return;
+        try {
+          const poll = await pollAdminAccessGrantRequest(pendingStep.alertId);
+          if (!active) return;
+          if (poll.authorized || poll.decision === 'approved') {
+            window.clearInterval(timer);
+            try {
+              const nextOutcome = await completePendingAdminLoginAfterGrant(authorizedEmails);
+              if (!active) return;
+              handleOutcome(nextOutcome);
+            } catch (err) {
+              if (!active) return;
+              setPendingStep(null);
+              setError(err instanceof Error ? err.message : 'Unable to finish sign-in.');
+            }
+          } else if (poll.decision === 'denied') {
+            window.clearInterval(timer);
+            await logoutAdmin().catch(() => undefined);
+            setPendingStep(null);
+            setError('Access request was denied by the primary admin.');
+          }
+        } catch {
+          // Retry next poll interval
+        }
+      }, 4000);
+      return () => {
+        active = false;
+        window.clearInterval(timer);
+      };
+    }
+  }, [pendingStep, authorizedEmails, onAuthenticated]);
 
   const handlePasswordSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     setSubmitting(true);
     try {
-      const session = await signInAdminWithEmailPassword(email, password, authorizedEmails);
+      const outcome = await signInAdminWithEmailPassword(email, password, authorizedEmails);
       setPassword('');
-      onAuthenticated(session.email);
+      handleOutcome(outcome);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign in.');
     } finally {
@@ -230,13 +322,37 @@ function AdminLoginView({
     setError('');
     setSubmitting(true);
     try {
-      const session = await signInAdminWithGoogle(authorizedEmails);
-      onAuthenticated(session.email);
+      const outcome = await signInAdminWithGoogle(authorizedEmails);
+      handleOutcome(outcome);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign in.');
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleVerifyCodeSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!pendingStep || pendingStep.status !== 'requires_verification') return;
+    setError('');
+    setVerifyingCode(true);
+    try {
+      const result = await verifyAdminAuthenticationCode(pendingStep.challengeId, authCode);
+      setPendingStep(null);
+      setAuthCode('');
+      onAuthenticated(result.email);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid authentication code.');
+    } finally {
+      setVerifyingCode(false);
+    }
+  };
+
+  const handleCancelPending = async () => {
+    setPendingStep(null);
+    setAuthCode('');
+    setError('');
+    await logoutAdmin().catch(() => undefined);
   };
 
   return (
@@ -336,108 +452,229 @@ function AdminLoginView({
             </div>
           </div>
 
-          <form onSubmit={handlePasswordSubmit} className="space-y-4">
-            <div>
-              <label
-                htmlFor="admin-login-email"
-                className="block text-xs font-medium text-zinc-300 mb-1.5"
-              >
-                Admin Email
-              </label>
-              <div className="relative">
-                <Mail
-                  className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                  aria-hidden="true"
-                />
-                <input
-                  id="admin-login-email"
-                  type="email"
-                  required
-                  autoFocus
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="alifcarimports@gmail.com"
-                  className="w-full h-11 pl-10 pr-3.5 bg-[#09090c] border border-white/[0.1] rounded-xl text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A] transition-colors"
-                />
+          {pendingStep?.status === 'requires_verification' ? (
+            <form onSubmit={handleVerifyCodeSubmit} className="space-y-4">
+              <div className="rounded-xl border border-amber-500/35 bg-amber-950/25 p-4 space-y-2">
+                <div className="flex items-center gap-2 text-amber-200 text-sm font-semibold">
+                  <KeyRound className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>Authentication Code Required</span>
+                </div>
+                <p className="text-xs text-zinc-300 leading-relaxed">
+                  {pendingStep.hasTotp
+                    ? `Enter the 6-digit code from your Authenticator app for ${pendingStep.email}${
+                        pendingStep.hasOtherDevices
+                          ? ', or approve this login from your signed-in admin device.'
+                          : '.'
+                      }`
+                    : `A login alert has been sent to your active admin device for ${pendingStep.email}. Enter the 6-digit verification code shown on that device or tap Approve there.`}
+                </p>
               </div>
-            </div>
 
-            <div>
-              <label
-                htmlFor="admin-login-password"
-                className="block text-xs font-medium text-zinc-300 mb-1.5"
-              >
-                Password
-              </label>
-              <div className="relative">
-                <Lock
-                  className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                  aria-hidden="true"
-                />
-                <input
-                  id="admin-login-password"
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter admin password"
-                  className="w-full h-11 pl-10 pr-11 bg-[#09090c] border border-white/[0.1] rounded-xl text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A] transition-colors"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 inline-flex items-center justify-center rounded-lg text-zinc-400 hover:text-white cursor-pointer"
+              <div>
+                <label
+                  htmlFor="admin-auth-code"
+                  className="block text-xs font-medium text-zinc-300 mb-1.5"
                 >
-                  {showPassword ? (
-                    <EyeOff className="w-4 h-4" aria-hidden="true" />
-                  ) : (
-                    <Eye className="w-4 h-4" aria-hidden="true" />
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <p
-                role="alert"
-                className="text-xs font-medium text-red-300 bg-red-950/50 border border-red-900/60 rounded-xl p-3 leading-relaxed"
-              >
-                {error}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full h-11 bg-[#E11D2A] hover:bg-[#C81722] disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer"
-            >
-              {submitting ? 'Signing in...' : 'Sign In'}
-            </button>
-
-            <div className="flex items-center gap-3 py-1">
-              <span className="h-px flex-1 bg-white/[0.08]" />
-              <span className="text-xs text-zinc-500">or continue with</span>
-              <span className="h-px flex-1 bg-white/[0.08]" />
-            </div>
-
-            <button
-              type="button"
-              onClick={() => void handleGoogleSignIn()}
-              disabled={submitting}
-              className="w-full h-11 inline-flex items-center justify-center gap-2.5 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.1] disabled:opacity-60 text-zinc-100 text-sm font-medium rounded-xl transition-colors cursor-pointer"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  fill="#EA4335"
-                  d="M12 10.2v3.9h5.4c-.2 1.3-1.5 3.8-5.4 3.8-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.8 3.4 14.6 2.5 12 2.5 6.8 2.5 2.5 6.8 2.5 12s4.3 9.5 9.5 9.5c5.5 0 9.1-3.8 9.1-9.2 0-.6-.1-1.1-.2-1.6H12z"
+                  6-Digit Authentication Code
+                </label>
+                <input
+                  id="admin-auth-code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  maxLength={6}
+                  required
+                  value={authCode}
+                  onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="000000"
+                  className="w-full h-12 px-4 bg-[#09090c] border border-white/[0.12] rounded-xl text-center font-mono text-xl tracking-[0.4em] text-white placeholder:text-zinc-600 focus:outline-none focus:border-[#E11D2A] transition-colors"
                 />
-              </svg>
-              <span>Sign in with Google</span>
-            </button>
-          </form>
+              </div>
+
+              {error && (
+                <p
+                  role="alert"
+                  className="text-xs font-medium text-red-300 bg-red-950/50 border border-red-900/60 rounded-xl p-3 leading-relaxed"
+                >
+                  {error}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={verifyingCode || authCode.length < 6}
+                className="w-full h-11 bg-[#E11D2A] hover:bg-[#C81722] disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer inline-flex items-center justify-center gap-2"
+              >
+                {verifyingCode ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                    <span>Verifying...</span>
+                  </>
+                ) : (
+                  <span>Verify &amp; Continue</span>
+                )}
+              </button>
+
+              {pendingStep.hasOtherDevices && (
+                <p className="text-[11px] text-zinc-400 flex items-center justify-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
+                  <span>Listening for one-tap approval from your other device...</span>
+                </p>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void handleCancelPending()}
+                className="w-full h-10 rounded-xl border border-white/[0.1] text-xs font-medium text-zinc-300 hover:text-white hover:border-white/25 transition-colors cursor-pointer"
+              >
+                Use a different account
+              </button>
+            </form>
+          ) : pendingStep?.status === 'pending_access_grant' ? (
+            <div className="space-y-4">
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-xl border border-amber-500/35 bg-amber-950/25 p-5 space-y-3"
+              >
+                <div className="flex items-center gap-2.5 text-amber-200 text-sm font-semibold">
+                  <ShieldAlert className="w-5 h-5 shrink-0" aria-hidden="true" />
+                  <span>Waiting for Primary Admin Approval</span>
+                </div>
+                <p className="text-xs text-zinc-200 leading-relaxed">
+                  An access grant notification has been sent to the primary admin for{' '}
+                  <span className="font-semibold text-white">{pendingStep.email}</span>. Once
+                  granted from the Admin Console or Mobile App, this page will continue
+                  automatically.
+                </p>
+                <div className="flex items-center gap-2 text-xs text-amber-300 pt-1">
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" />
+                  <span>Checking for approval...</span>
+                </div>
+              </div>
+
+              {error && (
+                <p
+                  role="alert"
+                  className="text-xs font-medium text-red-300 bg-red-950/50 border border-red-900/60 rounded-xl p-3 leading-relaxed"
+                >
+                  {error}
+                </p>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void handleCancelPending()}
+                className="w-full h-10 rounded-xl border border-white/[0.1] text-xs font-medium text-zinc-300 hover:text-white hover:border-white/25 transition-colors cursor-pointer"
+              >
+                Cancel Request &amp; Back to Sign In
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handlePasswordSubmit} className="space-y-4">
+              <div>
+                <label
+                  htmlFor="admin-login-email"
+                  className="block text-xs font-medium text-zinc-300 mb-1.5"
+                >
+                  Admin Email
+                </label>
+                <div className="relative">
+                  <Mail
+                    className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                    aria-hidden="true"
+                  />
+                  <input
+                    id="admin-login-email"
+                    type="email"
+                    required
+                    autoFocus
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Enter email"
+                    className="w-full h-11 pl-10 pr-3.5 bg-[#09090c] border border-white/[0.1] rounded-xl text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A] transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="admin-login-password"
+                  className="block text-xs font-medium text-zinc-300 mb-1.5"
+                >
+                  Password
+                </label>
+                <div className="relative">
+                  <Lock
+                    className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                    aria-hidden="true"
+                  />
+                  <input
+                    id="admin-login-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter admin password"
+                    className="w-full h-11 pl-10 pr-11 bg-[#09090c] border border-white/[0.1] rounded-xl text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D2A] transition-colors"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 inline-flex items-center justify-center rounded-lg text-zinc-400 hover:text-white cursor-pointer"
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-4 h-4" aria-hidden="true" />
+                    ) : (
+                      <Eye className="w-4 h-4" aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {error && (
+                <p
+                  role="alert"
+                  className="text-xs font-medium text-red-300 bg-red-950/50 border border-red-900/60 rounded-xl p-3 leading-relaxed"
+                >
+                  {error}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full h-11 bg-[#E11D2A] hover:bg-[#C81722] disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                {submitting ? 'Signing in...' : 'Sign In'}
+              </button>
+
+              <div className="flex items-center gap-3 py-1">
+                <span className="h-px flex-1 bg-white/[0.08]" />
+                <span className="text-xs text-zinc-500">or continue with</span>
+                <span className="h-px flex-1 bg-white/[0.08]" />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleGoogleSignIn()}
+                disabled={submitting}
+                className="w-full h-11 inline-flex items-center justify-center gap-2.5 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.1] disabled:opacity-60 text-zinc-100 text-sm font-medium rounded-xl transition-colors cursor-pointer"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="#EA4335"
+                    d="M12 10.2v3.9h5.4c-.2 1.3-1.5 3.8-5.4 3.8-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.8 3.4 14.6 2.5 12 2.5 6.8 2.5 2.5 6.8 2.5 12s4.3 9.5 9.5 9.5c5.5 0 9.1-3.8 9.1-9.2 0-.6-.1-1.1-.2-1.6H12z"
+                  />
+                </svg>
+                <span>Sign in with Google</span>
+              </button>
+            </form>
+          )}
         </div>
       </div>
     </main>
@@ -475,7 +712,7 @@ export default function App() {
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (!active) return;
-      if (user?.email && user.emailVerified) {
+      if (user?.email && user.emailVerified && isWebAdminSessionVerified(user.uid)) {
         let allowed = isAuthorizedAdminEmail(user.email, storeRef.current.adminEmails);
         if (!allowed) {
           const remoteAllowlist = isCloudflareBackendEnabled()
@@ -632,7 +869,7 @@ export default function App() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
-    void trackWebsiteVisit(db);
+    void trackWebsiteVisit(db, location.pathname);
   }, [location.pathname]);
 
   useEffect(() => {
@@ -1377,7 +1614,15 @@ export default function App() {
                       logoUrl={store.branding.logoUrl}
                       companyName={store.branding.companyName}
                       authorizedEmails={store.adminEmails}
-                      onAuthenticated={(email) => setAdminEmail(email)}
+                      onAuthenticated={(email) => {
+                        setAdminEmail(email);
+                        if (auth.currentUser) {
+                          void startWebAdminSession(auth, app, auth.currentUser, {
+                            onForcedSignOut: () => setAdminEmail(null),
+                            skipInitialSecurityCheck: true,
+                          });
+                        }
+                      }}
                       onBackToShowroom={() => navigate('/')}
                     />
                   )

@@ -1,8 +1,11 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import {
-  doc,
-  getDocFromServer,
+  browserSessionPersistence,
+  getAuth,
+  GoogleAuthProvider,
+  setPersistence,
+} from 'firebase/auth';
+import {
   getFirestore,
   initializeFirestore,
   type Firestore,
@@ -28,6 +31,9 @@ function createFirestoreClient(): Firestore {
 
 export const db = createFirestoreClient();
 export const auth = getAuth(app);
+if (typeof window !== 'undefined') {
+  void setPersistence(auth, browserSessionPersistence).catch(() => undefined);
+}
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
@@ -101,34 +107,15 @@ export function formatFirestoreUserMessage(err: unknown): string {
     return 'Firebase daily quota exceeded. Cloud sync is paused until usage limits reset tomorrow (or after upgrading your Firebase plan), so changes will not sync to other browsers yet.';
   }
   if (lower.includes('missing or insufficient permissions')) {
-    return 'Permission denied by Firebase security rules. Sign in with alifcarimports@gmail.com to publish changes.';
+    return 'Permission denied by Firebase security rules. Sign in with an authorized admin account to publish changes.';
   }
   return messageText;
 }
 
 async function testConnection(): Promise<void> {
+  // Showroom catalog runs on Cloudflare Worker D1 + R2 so we avoid unnecessary Firestore reads on startup.
   if (typeof window === 'undefined') {
     return;
-  }
-  const cfUrl =
-    typeof import.meta !== 'undefined' && import.meta.env
-      ? String(import.meta.env.VITE_CLOUDFLARE_API_URL || '').trim().toLowerCase()
-      : '';
-  const cloudflareExplicitlyDisabled =
-    cfUrl === 'disabled' || cfUrl === 'false' || cfUrl === 'off';
-  if (!cloudflareExplicitlyDisabled) {
-    return;
-  }
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    window.addEventListener('online', () => void testConnection(), { once: true });
-    return;
-  }
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
   }
 }
 
